@@ -1,4 +1,22 @@
-def render_meshes(all_fs, all_faces, all_uvs):
+from torch import Tensor
+from typing import List
+
+
+def render_meshes(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_uvs: List[List[Tensor]]) -> str:
+    """Creates HTML string for rendering textured meshes with Babylon.js
+
+    Note:
+        num_vertices and num_faces can be different for each mesh
+
+    Args:
+        all_fs (List[List[Tensor]]): num_rows list of num_cols lists of num_vertices * 3 lists of vertex positions
+        all_faces (List[List[Tensor]]): num_rows list of num_cols lists of num_faces * 3 lists of vertices per face
+        all_uvs (List[List[Tensor]]): num_rows list of num_cols lists of num_vertices * 2 lists of uv coordinates per vertex
+
+    Returns:
+        HTML string, can be saved to a file or logged to a HTML-supported logger
+    """
+
     num_rows = len(all_fs)
     num_cols = len(all_fs[0])
 
