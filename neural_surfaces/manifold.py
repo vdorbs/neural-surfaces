@@ -1,4 +1,4 @@
-from torch import arange, Tensor, tensor
+from torch import arange, arccos, maximum, minimum, sqrt, Tensor, tensor
 from torch.linalg import cross, norm
 from torch.nn import Module
 
@@ -36,7 +36,7 @@ class Manifold(Module):
         Returns:
             batch_dims * num_halfedges list of interior angles
         """
-        raise NotImplementedError
+        return self.halfedge_vectors_to_angles(self.embedding_to_halfedge_vectors(fs))
     
     def embedding_to_com(self, fs: Tensor) -> Tensor:
         """Computes the center of mass of a uniform density surface
@@ -87,6 +87,49 @@ class Manifold(Module):
         es = (permuted_fs[self.tips_to_halfedges] - permuted_fs[self.tails_to_halfedges]).permute(*range(1, 1 + len(batch_dims)), 0, -1)
         return es
     
+    def group_halfedge_vectors_by_face(self, es: Tensor) -> Tensor:
+        """Organizes halfedge vectors, counterclockwise around each face
+
+        Args:
+            es (Tensor): batch_dims * num_halfedges * 3 list of halfedge vectors
+
+        Returns:
+            batch_dims * num_faces * 3 * 3 list of halfedge vectors
+        """
+        batch_dims = es.shape[:-2]
+        es_by_face = es.permute(-2, *range(len(batch_dims)), -1)[self.halfedges_to_faces].permute(*range(1, 1 + len(batch_dims)), 0, -1)
+        return es_by_face
+    
+    def group_halfedge_lengths_by_face(self, ls: Tensor) -> Tensor:
+        """Organizes halfedge lengths, counterclockwise around each face
+
+        Args:
+            ls (Tensor): batch_dims * num_halfedges list of halfedge lengths
+
+        Returns:
+            batch_dims * num_faces * 3 list of halfedge lengths
+        """
+        batch_dims = ls.shape[:-1]
+        ls_by_face = ls.permute(-1, *range(len(batch_dims)))[self.halfedges_to_faces].permute(*range(1, 1 + len(batch_dims)), 0)
+        return ls_by_face
+    
+    def halfedge_vectors_to_angles(self, es: Tensor) -> Tensor:
+        """Computes angles across from each halfedge
+
+        Args:
+            es (Tensor): batch_dims * num_halfedges * 3 list of halfedge vectors
+
+        Returns:
+            batch_dims * num_halfedges list of interior angles
+        """
+        es_by_face = self.group_halfedge_lengths_by_face(es)
+        e_kjs = -es_by_face[..., tensor([1, 2, 0]), :]
+        e_kis = es_by_face[..., tensor([2, 0, 1]), :]
+        cos_alphas = (e_kjs * e_kis).sum(dim=-1) / (norm(e_kjs, dim=-1, keepdims=True) * norm(e_kis, dim=-1, keepdims=True))
+        t = tensor(1., dtype=cos_alphas.dtype, device=cos_alphas.device)
+        alphas = arccos(minimum(maximum(cos_alphas, -t), t))
+        return alphas
+
     def halfedge_vectors_to_face_areas(self, es: Tensor) -> Tensor:
         """Computes face areas
 
@@ -107,8 +150,7 @@ class Manifold(Module):
         Returns:
             batch_dims * num_faces * 3 list of face normals
         """
-        batch_dims = es.shape[:-2]
-        es_by_face = es.permute(-2, *range(len(batch_dims)), -1)[self.halfedges_to_faces].permute(*range(1, 1 + len(batch_dims)), 0, -1)
+        es_by_face = self.group_halfedge_vectors_by_face(es)
         Ns = cross(es_by_face[..., 0, :], -es_by_face[..., 2, :])
 
         if keep_scale:
@@ -137,7 +179,14 @@ class Manifold(Module):
         Returns:
             batch_dims * num_halfedges list of interior angles
         """
-        raise NotImplementedError
+        ls_by_face = self.group_halfedge_lengths_by_face(ls)
+        l_ijs = ls_by_face
+        l_jks = ls_by_face[..., tensor([1, 2, 0])]
+        l_kis = ls_by_face[..., tensor([2, 0, 1])]
+        cos_alphas = (l_jks ** 2 + l_kis ** 2 - l_ijs ** 2) / (2 * l_jks * l_kis)
+        t = tensor(1., dtype=cos_alphas.dtype, device=cos_alphas.device)
+        alphas = arccos(minimum(maximum(cos_alphas, -t), t))
+        return alphas
     
     def metric_to_face_areas(self, ls: Tensor) -> Tensor:
         """Computes face areas using Heron's formula
@@ -148,4 +197,11 @@ class Manifold(Module):
         Returns:
             batch_dims * num_faces list of face areas
         """
-        raise NotImplementedError
+        ls_by_face = self.group_halfedge_lengths_by_face(ls)
+        l_ijs = ls_by_face
+        l_jks = ls_by_face[..., tensor([1, 2, 0])]
+        l_kis = ls_by_face[..., tensor([2, 0, 1])]
+        sps = (l_ijs + l_jks + l_kis) / 2
+        As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
+        return As
+    
