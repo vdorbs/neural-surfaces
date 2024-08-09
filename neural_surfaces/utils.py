@@ -1,6 +1,20 @@
-from torch import Tensor
-from typing import List
+from io import BytesIO
+from torch import Tensor, tensor
+from trimesh.exchange.obj import load_obj
+from typing import List, Tuple
+from urllib.request import urlopen
 
+
+def load_obj_from_url(url: str) -> Tuple[Tensor, Tensor]:
+    """Loads mesh data from obj file at url
+
+    Returns:
+        num_vertices * 3 list of vertex positions and num_faces * 3 list of vertices per face
+    """
+    with urlopen(url) as response:
+        buffer = BytesIO(response.read())
+    mesh = load_obj(buffer, maintain_order=True)
+    return tensor(mesh['vertices']), tensor(mesh['faces'])
 
 def render_meshes(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_uvs: List[List[Tensor]]) -> str:
     """Creates HTML string for rendering textured meshes with Babylon.js

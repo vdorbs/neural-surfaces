@@ -87,6 +87,17 @@ class Manifold(Module):
         es = (permuted_fs[self.tips_to_halfedges] - permuted_fs[self.tails_to_halfedges]).permute(*range(1, 1 + len(batch_dims)), 0, -1)
         return es
     
+    def embedding_to_metric(self, fs: Tensor) -> Tensor:
+        """Computes discrete metric (halfedge lengths)
+
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+
+        Returns:
+            batch_dims * num_halfedges list of halfedge lengths
+        """
+        return self.halfedge_vectors_to_metric(self.embedding_to_halfedge_vectors(fs))
+    
     def group_halfedge_vectors_by_face(self, es: Tensor) -> Tensor:
         """Organizes halfedge vectors, counterclockwise around each face
 
@@ -97,7 +108,7 @@ class Manifold(Module):
             batch_dims * num_faces * 3 * 3 list of halfedge vectors
         """
         batch_dims = es.shape[:-2]
-        es_by_face = es.permute(-2, *range(len(batch_dims)), -1)[self.halfedges_to_faces].permute(*range(1, 1 + len(batch_dims)), 0, -1)
+        es_by_face = es.permute(-2, *range(len(batch_dims)), -1)[self.halfedges_to_faces].permute(*range(2, 2 + len(batch_dims)), 0, 1, -1)
         return es_by_face
     
     def group_halfedge_lengths_by_face(self, ls: Tensor) -> Tensor:
@@ -110,7 +121,7 @@ class Manifold(Module):
             batch_dims * num_faces * 3 list of halfedge lengths
         """
         batch_dims = ls.shape[:-1]
-        ls_by_face = ls.permute(-1, *range(len(batch_dims)))[self.halfedges_to_faces].permute(*range(1, 1 + len(batch_dims)), 0)
+        ls_by_face = ls.permute(-1, *range(len(batch_dims)))[self.halfedges_to_faces].permute(*range(2, 2 + len(batch_dims)), 0, 1)
         return ls_by_face
     
     def halfedge_vectors_to_angles(self, es: Tensor) -> Tensor:
@@ -122,10 +133,10 @@ class Manifold(Module):
         Returns:
             batch_dims * num_halfedges list of interior angles
         """
-        es_by_face = self.group_halfedge_lengths_by_face(es)
+        es_by_face = self.group_halfedge_vectors_by_face(es)
         e_kjs = -es_by_face[..., tensor([1, 2, 0]), :]
         e_kis = es_by_face[..., tensor([2, 0, 1]), :]
-        cos_alphas = (e_kjs * e_kis).sum(dim=-1) / (norm(e_kjs, dim=-1, keepdims=True) * norm(e_kis, dim=-1, keepdims=True))
+        cos_alphas = (e_kjs * e_kis).sum(dim=-1) / (norm(e_kjs, dim=-1) * norm(e_kis, dim=-1))
         t = tensor(1., dtype=cos_alphas.dtype, device=cos_alphas.device)
         alphas = arccos(minimum(maximum(cos_alphas, -t), t))
         return alphas
@@ -198,9 +209,7 @@ class Manifold(Module):
             batch_dims * num_faces list of face areas
         """
         ls_by_face = self.group_halfedge_lengths_by_face(ls)
-        l_ijs = ls_by_face
-        l_jks = ls_by_face[..., tensor([1, 2, 0])]
-        l_kis = ls_by_face[..., tensor([2, 0, 1])]
+        l_ijs, l_jks, l_kis = ls_by_face.permute(-1, *range(len(ls_by_face.shape[:-1])))
         sps = (l_ijs + l_jks + l_kis) / 2
         As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
         return As
