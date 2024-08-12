@@ -61,18 +61,8 @@ class Manifold(Module):
         row_idxs = cat([self.tails_to_halfedges, self.tips_to_halfedges, self.tails_to_halfedges, self.tips_to_halfedges])
         col_idxs = cat([self.tips_to_halfedges, self.tails_to_halfedges, self.tails_to_halfedges, self.tips_to_halfedges])
         values = cat([cot_alphas / 2, cot_alphas / 2, -cot_alphas / 2, -cot_alphas / 2], dim=-1)
-        L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values.permute(-1, *range(len(values.shape[:-1]))))
+        L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values.permute(-1, *range(len(values.shape[:-1])))).coalesce()
         return L
-
-        # twin_cot_alphas = cot_alphas[..., self.halfedges_to_twins]
-        # weights = (cot_alphas + twin_cot_alphas) / 2
-        # neighborhood_sums = self.halfedges_to_tails @ weights
-
-        # row_idxs = cat([self.tails_to_halfedges, arange(self.num_vertices)])
-        # col_idxs = cat([self.tips_to_halfedges, arange(self.num_vertices)])
-        # values = cat([weights, -neighborhood_sums], dim=-1)
-        # L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values)
-        # return L
     
     def areas_to_mass_matrix(self, As: Tensor) -> Tensor:
         raise NotImplementedError
