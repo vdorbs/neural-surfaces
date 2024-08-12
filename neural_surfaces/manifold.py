@@ -1,4 +1,4 @@
-from torch import arange, arccos, cat, diff, float64, maximum, minimum, ones, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
+from torch import arange, arccos, cat, diff, eye, float64, maximum, minimum, ones, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
 from torch.linalg import cross, norm
 from torch.nn import Module
 
@@ -55,7 +55,7 @@ class Manifold(Module):
             alphas (Tensor): batch_dims * num_halfedges list of interior angles, across from each halfedge
 
         Returns:
-            batch_dims * num_vertices * num_vertices list of Laplacians with same sparsity pattern
+            num_vertices * num_vertices * batch_dims Laplacians, where first two dimensions are sparse
         """
         cot_alphas = 1 / tan(alphas)
         row_idxs = cat([self.tails_to_halfedges, self.tips_to_halfedges, self.tails_to_halfedges, self.tips_to_halfedges])
@@ -63,9 +63,6 @@ class Manifold(Module):
         values = cat([cot_alphas / 2, cot_alphas / 2, -cot_alphas / 2, -cot_alphas / 2], dim=-1)
         L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values.permute(-1, *range(len(values.shape[:-1])))).coalesce()
         return L
-    
-    def areas_to_mass_matrix(self, As: Tensor) -> Tensor:
-        raise NotImplementedError
 
     def embedding_to_angles(self, fs: Tensor) -> sparse_coo_tensor:
         """Computes angles across from each halfedge
@@ -133,6 +130,18 @@ class Manifold(Module):
         """
         return self.angles_to_laplacian(self.embedding_to_angles(fs))
     
+    def embedding_to_mass_matrix(self, fs: Tensor, use_diag_mass: bool = False) -> sparse_coo_tensor:
+        """Computes mass matrix from vertex positions
+
+        Args:
+            fs (Tensor): batch_dims * num_vertices list of vertex positions
+            use_diag_mass (bool): whether mass matrix is diagonal/lumped
+
+        Returns:
+            num_vertices * num_vertices * batch_dims list of mass matrices, where first two dimensions are sparse
+        """
+        return self.face_areas_to_mass_matrix(self.embedding_to_face_areas(fs), use_diag_mass=use_diag_mass)
+    
     def embedding_to_metric(self, fs: Tensor) -> Tensor:
         """Computes discrete metric (halfedge lengths)
 
@@ -143,6 +152,44 @@ class Manifold(Module):
             batch_dims * num_halfedges list of halfedge lengths
         """
         return self.halfedge_vectors_to_metric(self.embedding_to_halfedge_vectors(fs))
+    
+    def face_areas_to_mass_matrix(self, As: Tensor, use_diag_mass: bool = False) -> sparse_coo_tensor:
+        """Computes mass matrix from face areas
+
+        Args:
+            As (Tensor): batch_dims * num_faces list of face areas
+            use_diag_mass (bool): whether mass matrix is diagonal/lumped
+
+        Returns:
+            num_vertices * num_vertices * batch_dims list of mass matrices, where first two dimensions are sparse
+        """
+        if use_diag_mass:
+            vertex_As = self.face_areas_to_vertex_areas(As)
+            indices = arange(self.num_vertices)
+            indices = stack([indices, indices])
+            M = sparse_coo_tensor(indices, vertex_As, is_coalesced=True)
+        else:
+            template_values = ((eye(3, dtype=As.dtype) + ones(3, 3, dtype=As.dtype)) / 12).flatten()
+            batch_dims = As.shape[:-1]
+            values = (As.unsqueeze(-1) * template_values.reshape(tuple(1 for _ in batch_dims) + (1, 9))).flatten(start_dim=-2)
+            row_idxs = self.faces.repeat_interleave(3, dim=-1).flatten()
+            col_idxs = self.faces.repeat(1, 3).flatten()
+            M = sparse_coo_tensor(stack([row_idxs, col_idxs]), values).coalesce()
+
+        return M
+        
+    def face_areas_to_vertex_areas(self, As: Tensor) -> Tensor:
+        """Distributes the area of each face to each of its vertices
+
+        Args:
+            As (Tensor): batch_dims * num_faces list of face areas
+
+        Returns:
+            batch_dims * num_vertices list of vertex areas
+        """
+        As_by_halfedges = (As.repeat_interleave(3, dim=-1) / 3)[..., self.faces_to_halfedges]
+        vertex_As = self.halfedges_to_tails @ As_by_halfedges
+        return vertex_As
     
     def halfedge_vectors_to_angles(self, es: Tensor) -> Tensor:
         """Computes angles across from each halfedge

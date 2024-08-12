@@ -60,3 +60,27 @@ class TestManifold(TestCase):
         
         L_comp = -tensor(cotan_laplacian(fs.numpy(), faces.numpy()).todense())
         assert_close(L, L_comp)
+
+    def test_vertex_areas(self):
+        """Checks that vertex areas are nonnegative and have same sum as face areas"""
+        fs, faces = load_obj_from_url(SPOT_URL)
+        m = Manifold(faces)
+        face_As = m.embedding_to_face_areas(fs)
+        vertex_As = m.face_areas_to_vertex_areas(face_As)
+
+        self.assertTrue((vertex_As > 0.).all())
+
+        assert_close(vertex_As.sum(), face_As.sum())
+
+    def test_mass_matrix(self):
+        """Checks that mass matrix is nonnegative, symmetric, and rows sum to vertex areas"""
+        fs, faces = load_obj_from_url(SPOT_URL)
+        m = Manifold(faces)
+        M = m.embedding_to_mass_matrix(fs)
+        dense_M = M.to_dense()
+
+        self.assertTrue((dense_M >= 0).all())
+        assert_close(dense_M, dense_M.T)
+
+        vertex_As = m.face_areas_to_vertex_areas(m.embedding_to_face_areas(fs))
+        assert_close((M @ ones_like(vertex_As)), vertex_As)

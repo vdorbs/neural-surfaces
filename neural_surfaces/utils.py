@@ -5,6 +5,8 @@ from typing import List, Tuple
 from urllib.request import urlopen
 
 
+BUNNY_URL = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/bunny/bunny.obj'
+CAT_URL = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/cat/cat-low-resolution.obj'
 SPOT_URL = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/spot/spot_low_resolution.obj'
 
 def load_obj_from_url(url: str) -> Tuple[Tensor, Tensor]:
