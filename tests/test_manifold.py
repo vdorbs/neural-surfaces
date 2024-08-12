@@ -1,6 +1,7 @@
 from neural_surfaces import Manifold
 from neural_surfaces.utils import load_obj_from_url
-from torch import ones_like, pi, tensor
+from potpourri3d import cotan_laplacian
+from torch import ones_like, pi, tensor, zeros_like
 from torch.testing import assert_close
 from unittest import TestCase
 
@@ -8,6 +9,14 @@ from unittest import TestCase
 spot_url = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/spot/spot_low_resolution.obj'
 
 class TestManifold(TestCase):
+    def test_embedding_to_halfedge_vectors(self):
+        """Checks that halfedge vectors sum to 0 around faces"""
+        fs, faces = load_obj_from_url(spot_url)
+        m = Manifold(faces)
+
+        e_sums = m.embedding_to_halfedge_vectors(fs)[m.halfedges_to_faces].sum(dim=-2)
+        assert_close(e_sums, zeros_like(e_sums))
+
     def test_metric(self):
         """Checks that discrete metric is nonnegative and satisfies the triangle inequality on each face"""
         fs, faces = load_obj_from_url(spot_url)
@@ -16,7 +25,7 @@ class TestManifold(TestCase):
         ls = m.embedding_to_metric(fs)
         self.assertTrue((ls > 0).all())
         
-        l_ijs = m.group_halfedge_lengths_by_face(ls)
+        l_ijs = ls[faces]
         l_jks = l_ijs[:, tensor([1, 2, 0])]
         l_kis = l_ijs[:, tensor([2, 0, 1])]
         self.assertTrue((l_ijs + l_jks >= l_kis).all() and (l_jks + l_kis >= l_ijs).all() and (l_kis + l_ijs >= l_jks).all())
@@ -44,3 +53,12 @@ class TestManifold(TestCase):
         self.assertTrue((As >= 0).all())
 
         assert_close(As, m.metric_to_face_areas(ls))
+
+    def test_laplacian(self):
+        """Checks Laplacian against potpourri3d Laplacian"""
+        fs, faces = load_obj_from_url(spot_url)
+        m = Manifold(faces)
+        L = m.embedding_to_laplacian(fs).to_dense()
+        
+        L_comp = -tensor(cotan_laplacian(fs.numpy(), faces.numpy()).todense())
+        assert_close(L, L_comp)
