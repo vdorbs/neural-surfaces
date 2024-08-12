@@ -58,15 +58,21 @@ class Manifold(Module):
             batch_dims * num_vertices * num_vertices list of Laplacians with same sparsity pattern
         """
         cot_alphas = 1 / tan(alphas)
-        twin_cot_alphas = cot_alphas[..., self.halfedges_to_twins]
-        weights = (cot_alphas + twin_cot_alphas) / 2
-        neighborhood_sums = self.halfedges_to_tails @ weights
-
-        row_idxs = cat([self.tails_to_halfedges, arange(self.num_vertices)])
-        col_idxs = cat([self.tips_to_halfedges, arange(self.num_vertices)])
-        values = cat([weights, -neighborhood_sums])
-        L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values)
+        row_idxs = cat([self.tails_to_halfedges, self.tips_to_halfedges, self.tails_to_halfedges, self.tips_to_halfedges])
+        col_idxs = cat([self.tips_to_halfedges, self.tails_to_halfedges, self.tails_to_halfedges, self.tips_to_halfedges])
+        values = cat([cot_alphas / 2, cot_alphas / 2, -cot_alphas / 2, -cot_alphas / 2], dim=-1)
+        L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values.permute(-1, *range(len(values.shape[:-1]))))
         return L
+
+        # twin_cot_alphas = cot_alphas[..., self.halfedges_to_twins]
+        # weights = (cot_alphas + twin_cot_alphas) / 2
+        # neighborhood_sums = self.halfedges_to_tails @ weights
+
+        # row_idxs = cat([self.tails_to_halfedges, arange(self.num_vertices)])
+        # col_idxs = cat([self.tips_to_halfedges, arange(self.num_vertices)])
+        # values = cat([weights, -neighborhood_sums], dim=-1)
+        # L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values)
+        # return L
     
     def areas_to_mass_matrix(self, As: Tensor) -> Tensor:
         raise NotImplementedError
@@ -163,7 +169,7 @@ class Manifold(Module):
         cos_alphas = (e_kjs * e_kis).sum(dim=-1) / (norm(e_kjs, dim=-1) * norm(e_kis, dim=-1))
         t = tensor(1., dtype=cos_alphas.dtype, device=cos_alphas.device)
         alphas = arccos(minimum(maximum(cos_alphas, -t), t))
-        alphas = alphas.flatten()[self.faces_to_halfedges]
+        alphas = alphas.flatten(start_dim=-2)[..., self.faces_to_halfedges]
         return alphas
 
     def halfedge_vectors_to_face_areas(self, es: Tensor) -> Tensor:
@@ -221,7 +227,7 @@ class Manifold(Module):
         cos_alphas = (l_jks ** 2 + l_kis ** 2 - l_ijs ** 2) / (2 * l_jks * l_kis)
         t = tensor(1., dtype=cos_alphas.dtype, device=cos_alphas.device)
         alphas = arccos(minimum(maximum(cos_alphas, -t), t))
-        alphas = alphas.flatten()[self.faces_to_halfedges]
+        alphas = alphas.flatten(start_dim=-2)[..., self.faces_to_halfedges]
         return alphas
     
     def metric_to_face_areas(self, ls: Tensor) -> Tensor:

@@ -1,17 +1,15 @@
 from neural_surfaces import Manifold
-from neural_surfaces.utils import load_obj_from_url
+from neural_surfaces.utils import load_obj_from_url, SPOT_URL
 from potpourri3d import cotan_laplacian
 from torch import ones_like, pi, tensor, zeros_like
 from torch.testing import assert_close
 from unittest import TestCase
 
 
-spot_url = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/spot/spot_low_resolution.obj'
-
 class TestManifold(TestCase):
     def test_embedding_to_halfedge_vectors(self):
         """Checks that halfedge vectors sum to 0 around faces"""
-        fs, faces = load_obj_from_url(spot_url)
+        fs, faces = load_obj_from_url(SPOT_URL)
         m = Manifold(faces)
 
         e_sums = m.embedding_to_halfedge_vectors(fs)[m.halfedges_to_faces].sum(dim=-2)
@@ -19,7 +17,7 @@ class TestManifold(TestCase):
 
     def test_metric(self):
         """Checks that discrete metric is nonnegative and satisfies the triangle inequality on each face"""
-        fs, faces = load_obj_from_url(spot_url)
+        fs, faces = load_obj_from_url(SPOT_URL)
         m = Manifold(faces)
 
         ls = m.embedding_to_metric(fs)
@@ -32,7 +30,7 @@ class TestManifold(TestCase):
         
     def test_angles(self):
         """Checks that angles are nonnegative, sum to pi on each face, and agree when computed from embedding or from discrete metric"""
-        fs, faces = load_obj_from_url(spot_url)
+        fs, faces = load_obj_from_url(SPOT_URL)
         m = Manifold(faces)
         ls = m.embedding_to_metric(fs)
 
@@ -45,7 +43,7 @@ class TestManifold(TestCase):
     
     def test_face_areas(self):
         """Checks that face areas are nonnegative and agree when computed from embedding or from discrete metric"""
-        fs, faces = load_obj_from_url(spot_url)
+        fs, faces = load_obj_from_url(SPOT_URL)
         m = Manifold(faces)
         ls = m.embedding_to_metric(fs)
 
@@ -56,7 +54,7 @@ class TestManifold(TestCase):
 
     def test_laplacian(self):
         """Checks Laplacian against potpourri3d Laplacian"""
-        fs, faces = load_obj_from_url(spot_url)
+        fs, faces = load_obj_from_url(SPOT_URL)
         m = Manifold(faces)
         L = m.embedding_to_laplacian(fs).to_dense()
         
