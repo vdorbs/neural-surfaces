@@ -1,4 +1,6 @@
+from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
+from socketserver import TCPServer
 from torch import Tensor, tensor
 from trimesh.exchange.obj import load_obj
 from typing import List, Tuple
@@ -21,7 +23,7 @@ def load_obj_from_url(url: str) -> Tuple[Tensor, Tensor]:
     mesh = load_obj(buffer, maintain_order=True)
     return tensor(mesh['vertices']), tensor(mesh['faces'])
 
-def render_meshes(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_uvs: List[List[Tensor]]) -> str:
+def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_uvs: List[List[Tensor]]) -> str:
     """Creates HTML string for rendering textured meshes with Babylon.js
 
     Note:
@@ -80,3 +82,15 @@ def render_meshes(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all
                 """
     
     return html_str
+
+def serve_html(html_str: str, port: int = 8000):
+    class Handler(SimpleHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(html_str.encode())
+
+    with TCPServer(('', port), Handler) as httpd:
+        print(f'Serving at https://localhost:{port}')
+        httpd.serve_forever()

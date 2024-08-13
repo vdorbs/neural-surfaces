@@ -1,8 +1,5 @@
-from neural_surfaces.utils import BUNNY_URL, CAT_URL, load_obj_from_url, PENGUIN_URL, render_meshes, SPOT_URL
+from neural_surfaces.utils import BUNNY_URL, CAT_URL, load_obj_from_url, meshes_to_html, PENGUIN_URL, serve_html, SPOT_URL
 from torch import atan2, pi, stack
-import wandb
-from wandb import Html
-
 
 all_fs = []
 all_faces = []
@@ -27,9 +24,4 @@ for url_row in [[BUNNY_URL, SPOT_URL], [CAT_URL, PENGUIN_URL]]:
     all_faces.append(faces_row)
     all_uvs.append(uvs_row)
 
-html_str = render_meshes(all_fs, all_faces, all_uvs)
-
-# Log to wandb
-wandb.init()
-wandb.log(dict(html=Html(html_str)))
-wandb.finish()
+serve_html(meshes_to_html(all_fs, all_faces, all_uvs))
