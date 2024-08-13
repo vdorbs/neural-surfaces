@@ -91,6 +91,34 @@ class Manifold(Module):
         
         return div_vs
     
+    def embedding_and_vertex_signal_to_face_derivatives(self, fs: Tensor, phis: Tensor, vector_valued) -> Tensor:
+        """Computes facewise gradient of a scalar or vector-valued function defined on vertices
+
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+            phis (Tensor): batch_dims * num_vertices list of function values per vertex or batch_dims * num_vertices * d list of vectors per vertex
+            vector_valued (bool): whether or not phis has a feature dimension d
+
+        Returns:
+            batch_dims * num_faces * 3 list of gradients per face or batch_dims * num_faces * d * 3 list of Jacobians per face
+        """
+        es = self.embedding_to_halfedge_vectors(fs)
+        es_by_face = es[..., self.halfedges_to_faces, :]
+        Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
+        As = norm(Ns, dim=-1) / 2
+        Ns = Ns / (2 * As).unsqueeze(-1)
+
+        basis_grads_by_face = (cross(Ns.unsqueeze(-2), es_by_face) / (2 * As.unflatten(-1, (self.num_faces, 1, 1))))[..., tensor([1, 2, 0]), :]
+        
+        if vector_valued:
+            phis_by_face = phis[..., self.tails_to_halfedges, :][..., self.halfedges_to_faces, :]
+            jac_phis = (phis_by_face.unsqueeze(-1) * basis_grads_by_face.unsqueeze(-2)).sum(dim=-3)
+            return jac_phis
+        
+        phis_by_face = phis[..., self.tails_to_halfedges][..., self.halfedges_to_faces]
+        grad_phis = (phis_by_face.unsqueeze(-1) * basis_grads_by_face).sum(dim=-2)
+        return grad_phis
+    
     def embedding_and_vertex_values_to_face_grads(self, fs: Tensor, phis: Tensor) -> Tensor:
         """Computes facewise gradient of a function defined on vertices
 
@@ -101,19 +129,19 @@ class Manifold(Module):
         Returns:
             batch_dims * num_faces * 3 list of gradients per face
         """
-        es = self.embedding_to_halfedge_vectors(fs)
-        es_by_face = es[..., self.halfedges_to_faces, :]
-        Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
-        As = norm(Ns, dim=-1) / 2
-        Ns = Ns / (2 * As).unsqueeze(-1)
-        
-        phis_by_face = phis[..., self.tails_to_halfedges][..., self.halfedges_to_faces]
-        basis_grads_by_face = cross(Ns.unsqueeze(-2), es_by_face) / (2 * As.unflatten(-1, (self.num_faces, 1, 1)))
-        grad_phis = (phis_by_face.unsqueeze(-1) * basis_grads_by_face[..., tensor([1, 2, 0]), :]).sum(dim=-2)
-        return grad_phis
+        return self.embedding_and_vertex_signal_to_face_derivatives(fs, phis, vector_valued=False)
     
     def embedding_and_vertex_vectors_to_face_jacs(self, fs: Tensor, vs: Tensor) -> Tensor:
-        raise NotImplementedError
+        """Computes facewise Jacobian of a tangent vector-valued function defined on vertices
+
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+            phis (Tensor): batch_dims * num_vertices * d list of tangent vectors per vertex
+
+        Returns:
+            batch_dims * num_faces * d * 3 list of Jacobians per face
+        """
+        return self.embedding_and_vertex_signal_to_face_derivatives(fs, vs, vector_valued=True)
 
     def embedding_to_angles(self, fs: Tensor) -> sparse_coo_tensor:
         """Computes angles across from each halfedge
