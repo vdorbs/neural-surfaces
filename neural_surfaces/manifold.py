@@ -64,8 +64,32 @@ class Manifold(Module):
         L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values.permute(-1, *range(len(values.shape[:-1])))).coalesce()
         return L
     
-    def embedding_and_face_vectors_to_vertex_divs(self, fs: Tensor, vs: Tensor) -> Tensor:
-        raise NotImplementedError
+    def embedding_and_face_vectors_to_vertex_divs(self, fs: Tensor, vs: Tensor, use_diag_mass: bool = False) -> Tensor:
+        """Computes vertexwise divergence of a tangent vector-valued function defined on faces
+        
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+            vs (Tensor): batch_dims * num_faces * 3 list of tangent vectors per face
+
+        Returns:
+            batch_dims * num_vertices list of divergences per vertex
+        """
+        es = self.embedding_to_halfedge_vectors(fs)
+        es_by_face = es[..., self.halfedges_to_faces, :]
+        Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
+        face_As = norm(Ns, dim=-1) / 2
+        Ns = Ns / (2 * face_As).unsqueeze(-1)
+
+        rot_es_by_face = cross(Ns.unsqueeze(-2), es_by_face)
+        div_vs = -(self.halfedges_to_tails @ (rot_es_by_face * vs.unsqueeze(-2)).sum(dim=-1)[..., tensor([1, 2, 0])].flatten(start_dim=-2)[..., self.faces_to_halfedges]) / 2
+
+        if use_diag_mass:
+            vertex_As = self.face_areas_to_vertex_areas(face_As)
+            div_vs = div_vs / vertex_As
+        else:
+            raise NotImplementedError
+        
+        return div_vs
     
     def embedding_and_vertex_values_to_face_grads(self, fs: Tensor, phis: Tensor) -> Tensor:
         """Computes facewise gradient of a function defined on vertices
@@ -78,12 +102,12 @@ class Manifold(Module):
             batch_dims * num_faces * 3 list of gradients per face
         """
         es = self.embedding_to_halfedge_vectors(fs)
+        es_by_face = es[..., self.halfedges_to_faces, :]
         Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
         As = norm(Ns, dim=-1) / 2
         Ns = Ns / (2 * As).unsqueeze(-1)
         
         phis_by_face = phis[..., self.tails_to_halfedges][..., self.halfedges_to_faces]
-        es_by_face = es[..., self.halfedges_to_faces, :]
         basis_grads_by_face = cross(Ns.unsqueeze(-2), es_by_face) / (2 * As.unflatten(-1, (self.num_faces, 1, 1)))
         grad_phis = (phis_by_face.unsqueeze(-1) * basis_grads_by_face[..., tensor([1, 2, 0]), :]).sum(dim=-2)
         return grad_phis

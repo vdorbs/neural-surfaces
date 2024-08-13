@@ -1,7 +1,7 @@
 from neural_surfaces import Manifold
 from neural_surfaces.utils import load_obj_from_url, SPOT_URL
 from potpourri3d import cotan_laplacian
-from torch import ones_like, pi, tensor, zeros_like
+from torch import float64, ones_like, pi, randn, tensor, zeros_like
 from torch.testing import assert_close
 from unittest import TestCase
 
@@ -84,4 +84,22 @@ class TestManifold(TestCase):
 
         vertex_As = m.face_areas_to_vertex_areas(m.embedding_to_face_areas(fs))
         assert_close((M @ ones_like(vertex_As)), vertex_As)
+
+    def test_grad_and_div(self):
+        """Checks that gradient and divergence computations are adjoint"""
+        fs, faces = load_obj_from_url(SPOT_URL)
+        m = Manifold(faces)
+
+        f = randn(m.num_vertices, dtype=float64)
+        G = randn(m.num_faces, 3)
+        Ns = m.embedding_to_face_normals(fs)
+        G -= (Ns * G).sum(dim=-1, keepdims=True) * Ns
+
+        A = m.embedding_to_face_areas(fs)
+        face_inner_product = (A * (m.embedding_and_vertex_values_to_face_grads(fs, f) * G).sum(dim=-1)).sum()
+
+        M = m.face_areas_to_vertex_areas(A)
+        vertex_inner_product = -(f * (M * m.embedding_and_face_vectors_to_vertex_divs(fs, G, use_diag_mass=True))).sum()
+
+        assert_close(face_inner_product, vertex_inner_product)
         
