@@ -68,6 +68,15 @@ class Manifold(Module):
         raise NotImplementedError
     
     def embedding_and_vertex_values_to_face_grads(self, fs: Tensor, phis: Tensor) -> Tensor:
+        """Computes facewise gradient of a function defined on vertices
+
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+            phis (Tensor): batch_dims * num_vertices list of function values per vertex
+
+        Returns:
+            batch_dims * num_faces * 3 list of gradients per face
+        """
         es = self.embedding_to_halfedge_vectors(fs)
         Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
         As = norm(Ns, dim=-1) / 2
