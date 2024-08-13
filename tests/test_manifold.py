@@ -84,3 +84,4 @@ class TestManifold(TestCase):
 
         vertex_As = m.face_areas_to_vertex_areas(m.embedding_to_face_areas(fs))
         assert_close((M @ ones_like(vertex_As)), vertex_As)
+        

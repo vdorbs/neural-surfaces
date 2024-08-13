@@ -19,11 +19,11 @@ class Manifold(Module):
         self.num_halfedges = 3 * self.num_faces
 
         self.tails_to_halfedges = faces.flatten()
-        self.tips_to_halfedges = faces[:, tensor([2, 0, 1])].flatten()
+        self.tips_to_halfedges = faces[:, tensor([1, 2, 0])].flatten()
         self.halfedges_to_faces = arange(self.num_halfedges).reshape(self.num_faces, 3)
         self.faces_to_halfedges = arange(self.num_halfedges)
 
-        self.halfedges_to_tails = sparse_coo_tensor(stack([self.tails_to_halfedges, arange(self.num_halfedges)]), ones(self.num_halfedges, dtype=float64))
+        self.halfedges_to_tails = sparse_coo_tensor(stack([self.tails_to_halfedges, arange(self.num_halfedges)]), ones(self.num_halfedges, dtype=dtype))
 
         # Pair twin halfedges and find boundary halfedges (halfedges without a twin)
         tail_sorting = sort(self.tails_to_halfedges)
@@ -63,6 +63,24 @@ class Manifold(Module):
         values = cat([cot_alphas / 2, cot_alphas / 2, -cot_alphas / 2, -cot_alphas / 2], dim=-1)
         L = sparse_coo_tensor(stack([row_idxs, col_idxs]), values.permute(-1, *range(len(values.shape[:-1])))).coalesce()
         return L
+    
+    def embedding_and_face_vectors_to_vertex_divs(self, fs: Tensor, vs: Tensor) -> Tensor:
+        raise NotImplementedError
+    
+    def embedding_and_vertex_values_to_face_grads(self, fs: Tensor, phis: Tensor) -> Tensor:
+        es = self.embedding_to_halfedge_vectors(fs)
+        Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
+        As = norm(Ns, dim=-1) / 2
+        Ns = Ns / (2 * As).unsqueeze(-1)
+        
+        phis_by_face = phis[..., self.tails_to_halfedges][..., self.halfedges_to_faces]
+        es_by_face = es[..., self.halfedges_to_faces, :]
+        basis_grads_by_face = cross(Ns.unsqueeze(-2), es_by_face) / (2 * As.unflatten(-1, (self.num_faces, 1, 1)))
+        grad_phis = (phis_by_face.unsqueeze(-1) * basis_grads_by_face[..., tensor([1, 2, 0]), :]).sum(dim=-2)
+        return grad_phis
+    
+    def embedding_and_vertex_vectors_to_face_jacs(self, fs: Tensor, vs: Tensor) -> Tensor:
+        raise NotImplementedError
 
     def embedding_to_angles(self, fs: Tensor) -> sparse_coo_tensor:
         """Computes angles across from each halfedge

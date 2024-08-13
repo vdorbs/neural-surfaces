@@ -1,7 +1,7 @@
 from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
 from socketserver import TCPServer
-from torch import Tensor, tensor
+from torch import arange, float64, stack, Tensor, tensor, zeros_like
 from trimesh.exchange.obj import load_obj
 from typing import List, Tuple
 from urllib.request import urlopen
@@ -94,3 +94,31 @@ def serve_html(html_str: str, port: int = 8000):
     with TCPServer(('', port), Handler) as httpd:
         print(f'Serving at https://localhost:{port}')
         httpd.serve_forever()
+
+def create_rectangular_mesh(num_rows: int, num_cols: int, is_2d: bool = False) -> Tuple[Tensor, Tensor]:
+    """Creates a triangle mesh of a rectangle in either 2D or 3D
+    
+    Args:
+        num_rows (int): number of vertices in vertical direction
+        num_cols (int): number of vertices is horizontal direction
+        is_2d (bool): whether or not vertices are 2D or 3D (with zero third coordinate)
+
+    Returns:
+        (num_rows * num_cols) * d list of vertex positions and ((num_rows - 1) * 2 * (num_cols - 1)) * 3 list of faces per vertex
+    """
+    xs = arange(num_cols, dtype=float64).repeat(num_rows)
+    ys = arange(num_rows).repeat_interleave(num_cols)
+    if is_2d:
+        vertices = stack([xs, ys], dim=-1)
+    else:
+        zs = zeros_like(ys)
+        vertices = stack([xs, ys, zs], dim=-1)
+
+    faces = []
+    for i in range(num_rows - 1):
+        for j in range(num_cols - 1):
+            faces += [[num_rows * i + j, num_rows * i + j + 1, num_rows * i + num_cols + j]]
+            faces += [[num_rows * i + j + 1, num_rows * i + num_cols + j + 1, num_rows * i + num_cols + j]]
+    faces = tensor(faces)
+
+    return vertices, faces
