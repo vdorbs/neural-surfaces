@@ -1,17 +1,17 @@
-from neural_surfaces.utils import BUNNY_URL, CAT_URL, load_obj_from_url, meshes_to_html, PENGUIN_URL, serve_html, SPOT_URL
+from neural_surfaces.utils import meshes_to_html, OdedSteinMeshes, serve_html
 from torch import atan2, pi, stack
 
 all_fs = []
 all_faces = []
 all_uvs = []
 
-for url_row in [[BUNNY_URL, SPOT_URL], [CAT_URL, PENGUIN_URL]]:
+meshes = OdedSteinMeshes()
+for data_row in [[meshes.bunny(), meshes.spot()], [meshes.cat(), meshes.penguin()]]:
     fs_row = []
     faces_row = []
     uvs_row = []
     
-    for url in url_row:
-        fs, faces = load_obj_from_url(url)
+    for fs, faces in data_row:
         us = (atan2(fs[:, 2], fs[:, 0]) + pi) / (2 * pi)
         vs = (fs[:, 1] - fs[:, 1].min()) / (fs[:, 1].max() - fs[:, 1].min())
         uvs = stack([us, vs], dim=-1)

@@ -49,7 +49,7 @@ class Manifold(Module):
                     self.is_boundary_halfedge[halfedge_idx] = True
 
         self.num_edges = (self.num_halfedges - self.is_boundary_halfedge.sum()) // 2
-        self.euler_char = self.num_vertices - self.num_edges + self.num_faces
+        self.euler_char = (self.num_vertices - self.num_edges + self.num_faces).item()
 
     def angles_to_laplacian(self, alphas: Tensor):
         """Computes cotan Laplacian from interior angles

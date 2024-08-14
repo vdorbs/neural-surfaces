@@ -1,15 +1,27 @@
 from neural_surfaces import Manifold
-from neural_surfaces.utils import load_obj_from_url, SPOT_URL
+from neural_surfaces.utils import OdedSteinMeshes
 from potpourri3d import cotan_laplacian
 from torch import float64, ones_like, pi, randn, tensor, zeros_like
 from torch.testing import assert_close
-from unittest import TestCase
+from unittest import main, TestCase
 
+
+meshes = OdedSteinMeshes()
+spot = meshes.spot()
 
 class TestManifold(TestCase):
+    def test_meshes(self):
+        """Checks that available meshes are boundaryless with Euler characteristic 2"""
+        for name in meshes.names:
+            _, faces = getattr(meshes, name)()
+            m = Manifold(faces)
+            
+            self.assertTrue(m.is_boundary_halfedge.sum().item() == 0)
+            self.assertTrue(m.euler_char == 2)
+
     def test_embedding_to_halfedge_vectors(self):
         """Checks that halfedge vectors sum to 0 around faces"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
 
         e_sums = m.embedding_to_halfedge_vectors(fs)[m.halfedges_to_faces].sum(dim=-2)
@@ -17,7 +29,7 @@ class TestManifold(TestCase):
 
     def test_metric(self):
         """Checks that discrete metric is nonnegative and satisfies the triangle inequality on each face"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
 
         ls = m.embedding_to_metric(fs)
@@ -30,7 +42,7 @@ class TestManifold(TestCase):
         
     def test_angles(self):
         """Checks that angles are nonnegative, sum to pi on each face, and agree when computed from embedding or from discrete metric"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
         ls = m.embedding_to_metric(fs)
 
@@ -43,7 +55,7 @@ class TestManifold(TestCase):
     
     def test_face_areas(self):
         """Checks that face areas are nonnegative and agree when computed from embedding or from discrete metric"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
         ls = m.embedding_to_metric(fs)
 
@@ -54,7 +66,7 @@ class TestManifold(TestCase):
 
     def test_laplacian(self):
         """Checks Laplacian against potpourri3d Laplacian"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
         L = m.embedding_to_laplacian(fs).to_dense()
         
@@ -63,7 +75,7 @@ class TestManifold(TestCase):
 
     def test_vertex_areas(self):
         """Checks that vertex areas are nonnegative and have same sum as face areas"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
         face_As = m.embedding_to_face_areas(fs)
         vertex_As = m.face_areas_to_vertex_areas(face_As)
@@ -74,7 +86,7 @@ class TestManifold(TestCase):
 
     def test_mass_matrix(self):
         """Checks that mass matrix is nonnegative, symmetric, and rows sum to vertex areas"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
         M = m.embedding_to_mass_matrix(fs)
         dense_M = M.to_dense()
@@ -87,7 +99,7 @@ class TestManifold(TestCase):
 
     def test_grad_and_div(self):
         """Checks that gradient and divergence computations are adjoint"""
-        fs, faces = load_obj_from_url(SPOT_URL)
+        fs, faces = spot
         m = Manifold(faces)
 
         f = randn(m.num_vertices, dtype=float64)
@@ -102,4 +114,7 @@ class TestManifold(TestCase):
         vertex_inner_product = -(f * (M * m.embedding_and_face_vectors_to_vertex_divs(fs, G, use_diag_mass=True))).sum()
 
         assert_close(face_inner_product, vertex_inner_product)
-        
+
+
+if __name__ == '__main__':
+    main()

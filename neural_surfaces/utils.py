@@ -1,16 +1,66 @@
 from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
+from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
 from torch import arange, float64, stack, Tensor, tensor, zeros_like
 from trimesh.exchange.obj import load_obj
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 from urllib.request import urlopen
 
 
-BUNNY_URL = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/bunny/bunny.obj'
-CAT_URL = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/cat/cat-low-resolution.obj'
-PENGUIN_URL = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/penguin/penguin.obj'
-SPOT_URL = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects/spot/spot_low_resolution.obj'
+armadillo = dict(name='armadillo', low='armadillo')
+bunny = dict(name='bunny', low='bunny', high='bunny_hr')
+cat = dict(name='cat', low='cat-low-resolution', high='cat')
+fish = dict(name='fish', low='fish_low_resolution', high='fish')
+goat_head = dict(name='goathead', high='goathead')
+koala = dict(name='koala', low='koala_low_resolution', high='koala')
+nefertiti = dict(name='nefertiti', low='nefertiti-lowres', high='nefertiti')
+penguin = dict(name='penguin', low='penguin', high='penguin_hr')
+plane = dict(name='plane', high='plane')
+scorpion = dict(name='scorpion', low='scorpion_low_resolution', high='scorpion')
+spot = dict(name='spot', low='spot_low_resolution', high='spot')
+mesh_dicts = [armadillo, bunny, cat, fish, goat_head, koala, nefertiti, penguin, plane, scorpion, spot]
+url_prefix = 'https://raw.githubusercontent.com/odedstein/meshes/master/objects'
+
+class OdedSteinMeshes:
+    """Class for accessing meshes from https://github.com/odedstein/meshes
+    
+    Available meshes are armadillo, bunny, cat, fish, goat_head, koala, nefertiti, penguin, plane, scorpion, and spot. Each mesh has a single component, no boundary, and Euler characteristic 2 (genus 0).
+
+    .. code-block:: py
+        meshes = OdedSteinMeshes()
+        fs, faces = meshes.spot()
+        // fs is num_vertices * 3 list of vertex positions
+        // faces is num_faces * 3 list of vertices per face
+
+        // Load all meshes
+        data = []
+        for name in meshes.names:
+            fs, faces = getattr(meshes, name)()
+            data.append((fs, faces))
+    """
+    def __init__(self, is_high_res: bool = False, preload: bool = False):
+        """Creates class for accessing meshes from https://github.com/odedstein/meshes
+
+        Args:
+            is_high_res (bool): whether or not to load high resolution versions of meshes
+            preload (bool): whether or not to load all meshes at construction
+        """
+        res = 'high' if is_high_res else 'low'
+
+        self.names = []
+        for mesh_dict in mesh_dicts:
+            if res in mesh_dict:
+                name = mesh_dict['name']
+                self.names.append(name)
+                url = f'{url_prefix}/{name}/{mesh_dict[res]}.obj'
+
+                if preload:
+                    fs, faces = load_obj_from_url(url)
+                    setattr(self, name, lambda data=(fs, faces): data)
+                else:
+                    setattr(self, name, lambda url=url: load_obj_from_url(url))
+
 
 def load_obj_from_url(url: str) -> Tuple[Tensor, Tensor]:
     """Loads mesh data from obj file at url
@@ -83,7 +133,15 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
     
     return html_str
 
-def serve_html(html_str: str, port: int = 8000):
+def serve_html(html_str: str, serve_locally: bool = True, port: int = 8000):
+    """Starts a server which serves a specified HTML string
+    
+    Args:
+        html_str (str): HTML string to serve
+        serve_locally (bool): whether server is visible from localhost (True) or local network IP address (False)
+        port (int): server port
+    """
+
     class Handler(SimpleHTTPRequestHandler):
         def do_GET(self):
             self.send_response(200)
@@ -91,8 +149,15 @@ def serve_html(html_str: str, port: int = 8000):
             self.end_headers()
             self.wfile.write(html_str.encode())
 
-    with TCPServer(('', port), Handler) as httpd:
-        print(f'Serving at https://localhost:{port}')
+    if serve_locally:
+        ip = 'localhost'
+    else:
+        with socket(AF_INET, SOCK_DGRAM) as s:
+            s.connect(('8.8.8.8', 80))
+            ip = s.getsockname()[0]
+
+    with TCPServer((ip, port), Handler) as httpd:
+        print(f'Serving at https://{ip}:{port}')
         httpd.serve_forever()
 
 def create_rectangular_mesh(num_rows: int, num_cols: int, is_2d: bool = False) -> Tuple[Tensor, Tensor]:
