@@ -1,6 +1,9 @@
 from torch import arange, arccos, cat, diff, eye, float64, maximum, minimum, ones, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
 from torch.linalg import cross, norm
 from torch.nn import Module
+from torch.sparse import spdiags
+from torchsparsegradutils import sparse_generic_solve
+from typing import Callable
 
 
 class Manifold(Module):
@@ -198,6 +201,61 @@ class Manifold(Module):
         """
         return fs[..., self.tips_to_halfedges, :] - fs[..., self.tails_to_halfedges, :]
     
+    def embedding_to_heat_method_solver(self, fs: Tensor, use_diag_mass: bool = False, diff_coeff: float = 1., eps: float = 1e-6) -> Callable[[Tensor], Tensor]:
+        """Precomputes data needed for heat method solver, which computes approximates distances
+
+        Args:
+            fs (Tensor): num_vertices * 3 list of vertex positions
+            use_diag_mass (bool): whether mass matrix is diagonal/lumped
+            diff_coeff (float): coefficient of diffusion, higher coefficient smooths distance more
+            eps (float): scalar multiple of identity added to Laplacian in final Poisson equation solve
+
+        Returns:
+            Function mapping a num_source list of vertex indices to a num_sources * num_vertices list of geodesic distances 
+        """
+        es = self.embedding_to_halfedge_vectors(fs)
+        Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
+        face_As = norm(Ns, dim=-1) / 2
+        Ns = Ns / (2 * face_As).unsqueeze(-1)
+
+        L = self.angles_to_laplacian(self.halfedge_vectors_to_angles(es))
+        M = self.face_areas_to_mass_matrix(face_As, use_diag_mass=use_diag_mass)
+        h = self.halfedge_vectors_to_metric(es).mean() ** 2
+        A = (M - h * diff_coeff * L).coalesce()
+        L_eps = (L - eps * spdiags(ones(self.num_vertices, dtype=fs.dtype), tensor(0), shape=L.shape)).coalesce()
+
+        es_by_face = es[..., self.halfedges_to_faces, :]
+        rot_es_by_face = cross(Ns.unsqueeze(-2), es_by_face)
+        basis_grads_by_face = (rot_es_by_face / (2 * face_As.unflatten(-1, (self.num_faces, 1, 1))))[..., tensor([1, 2, 0]), :]
+
+        if use_diag_mass:
+            vertex_As = M.values()
+
+        def heat_method_solver(source_idxs: Tensor) -> Tensor:
+            """Computes geodesic distance from specified source vertices to all other vertices
+            
+            Args:
+                source_idxs (Tensor): list of num_sources vertex indices
+
+            Returns:
+                num_sources * num_vertices list of geodesic distances
+            """
+            u_0s = zeros(self.num_vertices, len(source_idxs), dtype=fs.dtype)
+            for j, source_idx in enumerate(source_idxs):
+                u_0s[source_idx, j] = 1.
+
+            u_hs = sparse_generic_solve(A, u_0s)
+            u_hs_by_face = u_hs[self.tails_to_halfedges][self.halfedges_to_faces]
+            eiko_field = (u_hs_by_face.unsqueeze(-1) * basis_grads_by_face.unsqueeze(-2)).sum(dim=-3)
+            eiko_field = -eiko_field / norm(eiko_field, dim=-1, keepdims=True)
+            eiko_field = eiko_field.transpose(0, 1)
+            div_eiko_field = -(self.halfedges_to_tails @ (rot_es_by_face.unsqueeze(0) * eiko_field.unsqueeze(-2)).sum(dim=-1)[..., tensor([1, 2, 0])].flatten(start_dim=-2)[:, self.faces_to_halfedges].T) / 2
+            dists = sparse_generic_solve(L_eps, div_eiko_field)
+            dists = dists - dists.min(dim=0, keepdims=True).values
+            return dists
+
+        return heat_method_solver
+    
     def embedding_to_laplacian(self, fs: Tensor) -> sparse_coo_tensor:
         """Computes cotan Laplacian from vertex positions
 
@@ -246,7 +304,7 @@ class Manifold(Module):
             vertex_As = self.face_areas_to_vertex_areas(As)
             indices = arange(self.num_vertices)
             indices = stack([indices, indices])
-            M = sparse_coo_tensor(indices, vertex_As, is_coalesced=True)
+            M = sparse_coo_tensor(indices, vertex_As, size=(self.num_vertices, self.num_vertices), is_coalesced=True)
         else:
             template_values = ((eye(3, dtype=As.dtype) + ones(3, 3, dtype=As.dtype)) / 12).flatten()
             batch_dims = As.shape[:-1]
