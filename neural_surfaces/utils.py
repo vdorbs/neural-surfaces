@@ -157,7 +157,7 @@ def serve_html(html_str: str, serve_locally: bool = True, port: int = 8000):
             ip = s.getsockname()[0]
 
     with TCPServer((ip, port), Handler) as httpd:
-        print(f'Serving at https://{ip}:{port}')
+        print(f'Serving at http://{ip}:{port}')
         httpd.serve_forever()
 
 def create_rectangular_mesh(num_rows: int, num_cols: int, is_2d: bool = False) -> Tuple[Tensor, Tensor]:
