@@ -78,7 +78,7 @@ class SphericalSurfaceModel(Module):
                 grads.append(grad_i)
 
         jac = stack(grads, dim=-2)
-        jac_crosses = cross(jac[..., tensor([1, 2, 0]), :], jac[..., tensor([2, 0, 1]), :], dim=-2).transpose(-2, -1)
+        jac_crosses = cross(jac[..., tensor([1, 2, 0])], jac[..., tensor([2, 0, 1])], dim=-2)
         N = (jac_crosses * x.unsqueeze(-2)).sum(dim=-1)
         N = N / norm(N, dim=-1, keepdims=True)
         return N
