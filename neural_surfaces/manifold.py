@@ -1,9 +1,9 @@
-from torch import arange, arccos, cat, diff, eye, float64, maximum, minimum, ones, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
+from torch import arange, arccos, cat, diff, eye, float64, maximum, minimum, multinomial, ones, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
 from torch.linalg import cross, norm
 from torch.nn import Module
 from torch.sparse import spdiags
 from torchsparsegradutils import sparse_generic_solve
-from typing import Callable
+from typing import Callable, Tuple
 
 
 class Manifold(Module):
@@ -289,6 +289,40 @@ class Manifold(Module):
             batch_dims * num_halfedges list of halfedge lengths
         """
         return self.halfedge_vectors_to_metric(self.embedding_to_halfedge_vectors(fs))
+    
+    def embedding_to_samples(self, fs: Tensor, num_samples: int) -> Tuple[Tensor, Tensor, Tensor]:
+        """Computes uniform samples from surface
+        
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+            num_samples (int): number of samples computed per batch element
+
+        Returns:
+            batch_dims * num_samples list of face indices, batch_dims * num_samples * 3 list of barycentric coordinates, and batch_dims * num_samples * 3 list of samples
+        """
+        batch_dims = fs.shape[:-2]
+        face_As = self.embedding_to_face_areas(fs)
+        flat_face_As = face_As.flatten(end_dim=len(batch_dims) - 1)
+        flat_face_idxs = multinomial(flat_face_As, num_samples, replacement=True)
+        face_idxs = flat_face_idxs.reshape(batch_dims + (num_samples,))
+
+        bary_is = 1 - sqrt(1 - rand(batch_dims + (num_samples,), dtype=fs.dtype))
+        bary_js = (1 - bary_is) * rand_like(bary_is)
+        bary_ks = 1 - bary_is - bary_js
+        barys = stack([bary_is, bary_js, bary_ks], dim=-1)
+
+        flat_barys = barys.flatten(end_dim=max(len(batch_dims) - 1, 0))
+        flat_fs_by_faces = fs[..., self.faces, :].flatten(end_dim=max(len(batch_dims) - 1, 0))
+        
+        if face_idxs.shape == (num_samples,):
+            flat_face_idxs = [flat_face_idxs]
+            flat_barys = [flat_barys]
+            flat_fs_by_faces = [flat_fs_by_faces]
+
+        flat_samples = stack([(fs_by_faces_row[face_idxs_row] * barys_row.unsqueeze(-1)).sum(dim=-2) for fs_by_faces_row, face_idxs_row, barys_row in zip(flat_fs_by_faces, flat_face_idxs, flat_barys)])
+        samples = flat_samples.reshape(batch_dims + (num_samples, 3))
+        
+        return face_idxs, barys, samples
     
     def face_areas_to_mass_matrix(self, As: Tensor, use_diag_mass: bool = False) -> sparse_coo_tensor:
         """Computes mass matrix from face areas
