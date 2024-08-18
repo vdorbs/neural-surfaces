@@ -115,6 +115,19 @@ class TestManifold(TestCase):
 
         assert_close(face_inner_product, vertex_inner_product)
 
+    def test_flip_halfedge(self):
+        faces = tensor([[0, 1, 2], [3, 2, 1]])
+        m = Manifold(faces)
+        m.flip_halfedge(1)
+
+        self.assertTrue((m.faces == tensor([[1, 3, 0], [2, 0, 3]])).all())
+        self.assertTrue((m.tails_to_halfedges == tensor([0, 3, 2, 3, 0, 1])).all())
+        self.assertTrue((m.tips_to_halfedges == tensor([1, 0, 0, 2, 3, 3])).all())
+        assert_close(m.halfedges_to_tails.to_dense(), tensor([[1, 0, 0, 0, 1, 0], [0, 0, 0, 0, 0, 1], [0, 0, 1, 0, 0, 0], [0, 1, 0, 1, 0, 0]], dtype=float64))
+        self.assertTrue((m.halfedges_to_faces == tensor([[5, 1, 0], [2, 4, 3]])).all())
+        self.assertTrue((m.faces_to_halfedges == tensor([[5, 1, 0, 2, 4, 3]])).all())
+        self.assertTrue((m.halfedges_to_twins == tensor([-1, 4, -1, -1, 1, -1])).all())
+        self.assertTrue((m.is_boundary_halfedge == tensor([True, False, True, True, False, True])).all())
 
 if __name__ == '__main__':
     main()

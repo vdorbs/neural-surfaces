@@ -15,14 +15,14 @@ class Manifold(Module):
             faces (Tensor): num_faces * 3 list of vertices per face
         """
         Module.__init__(self)
-        self.register_buffer('faces', faces)
+        self.faces = faces.clone()
 
         self.num_vertices = faces.max().item() + 1
         self.num_faces = len(faces)
         self.num_halfedges = 3 * self.num_faces
 
-        self.tails_to_halfedges = faces.flatten()
-        self.tips_to_halfedges = faces[:, tensor([1, 2, 0])].flatten()
+        self.tails_to_halfedges = faces.clone().flatten()
+        self.tips_to_halfedges = faces.clone()[:, tensor([1, 2, 0])].flatten()
         self.halfedges_to_faces = arange(self.num_halfedges).reshape(self.num_faces, 3)
         self.faces_to_halfedges = arange(self.num_halfedges)
 
@@ -361,6 +361,44 @@ class Manifold(Module):
         As_by_halfedges = (As.repeat_interleave(3, dim=-1) / 3)[..., self.faces_to_halfedges]
         vertex_As = self.halfedges_to_tails @ As_by_halfedges
         return vertex_As
+    
+    def flip_halfedge(self, halfedge: int):
+        """Updates topological data to implement a non-boundary halfedge flip
+
+        Args:
+            halfedge (int): index of halfedge to flip
+        """
+        tail = self.tails_to_halfedges[halfedge].item()
+        tip = self.tips_to_halfedges[halfedge].item()
+        
+        face = (arange(self.num_faces)[(self.halfedges_to_faces == halfedge).any(dim=-1)])[0].item()
+        selector = self.faces[face] == tail
+        opp_vertex = (self.faces[face][tensor([2, 0, 1])][selector])[0].item()
+        next_halfedge = (self.halfedges_to_faces[face][tensor([1, 2, 0])][selector])[0].item()
+        next_next_halfedge = (self.halfedges_to_faces[face][tensor([2, 0, 1])][selector])[0].item()
+
+        twin_halfedge = self.halfedges_to_twins[halfedge].item()
+        twin_face = (arange(self.num_faces)[(self.halfedges_to_faces == twin_halfedge).any(dim=-1)])[0].item()
+        twin_selector = self.faces[twin_face] == tail
+        twin_opp_vertex = (self.faces[twin_face][tensor([1, 2, 0])][twin_selector])[0].item()
+        twin_next_halfedge = (self.halfedges_to_faces[twin_face][twin_selector])[0].item()
+        twin_next_next_halfedge = (self.halfedges_to_faces[twin_face][tensor([1, 2, 0])][twin_selector])[0].item()
+
+        self.tails_to_halfedges[halfedge] = twin_opp_vertex
+        self.tails_to_halfedges[twin_halfedge] = opp_vertex
+        self.halfedges_to_tails = sparse_coo_tensor(stack([self.tails_to_halfedges, arange(self.num_halfedges)]), ones(self.num_halfedges, dtype=self.halfedges_to_tails.dtype))
+
+        self.tips_to_halfedges[halfedge] = opp_vertex
+        self.tips_to_halfedges[twin_halfedge] = twin_opp_vertex
+
+        self.faces[face] = tensor([tail, twin_opp_vertex, opp_vertex])
+        self.faces[twin_face] = tensor([tip, opp_vertex, twin_opp_vertex])
+
+        self.halfedges_to_faces[face] = tensor([twin_next_halfedge, halfedge, next_next_halfedge])
+        self.halfedges_to_faces[twin_face] = tensor([next_halfedge, twin_halfedge, twin_next_next_halfedge])
+
+        self.faces_to_halfedges[(3 * face):(3 * (face + 1))] = self.halfedges_to_faces[face]
+        self.faces_to_halfedges[(3 * twin_face):(3 * (twin_face + 1))] = self.halfedges_to_faces[twin_face]
     
     def halfedge_vectors_to_angles(self, es: Tensor) -> Tensor:
         """Computes angles across from each halfedge
