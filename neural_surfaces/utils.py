@@ -83,6 +83,7 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
         all_fs (List[List[Tensor]]): num_rows list of num_cols lists of num_vertices * 3 lists of vertex positions
         all_faces (List[List[Tensor]]): num_rows list of num_cols lists of num_faces * 3 lists of vertices per face
         all_uvs (List[List[Tensor]]): num_rows list of num_cols lists of num_vertices * 2 lists of uv coordinates per vertex
+        mode (str): whether rendered texture is 'checkerboard' or 'turbo' (rainbow colormap)
 
     Returns:
         HTML string, can be saved to a file or logged to a HTML-supported logger
