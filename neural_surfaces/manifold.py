@@ -15,7 +15,7 @@ class Manifold(Module):
             faces (Tensor): num_faces * 3 list of vertices per face
         """
         Module.__init__(self)
-        self.faces = faces.clone()
+        self.register_buffer('faces', faces.clone())
 
         self.num_vertices = faces.max().item() + 1
         self.num_faces = len(faces)
@@ -306,7 +306,7 @@ class Manifold(Module):
         flat_face_idxs = multinomial(flat_face_As, num_samples, replacement=True)
         face_idxs = flat_face_idxs.reshape(batch_dims + (num_samples,))
 
-        bary_is = 1 - sqrt(1 - rand(batch_dims + (num_samples,), dtype=fs.dtype))
+        bary_is = 1 - sqrt(1 - rand(batch_dims + (num_samples,), dtype=fs.dtype, device=fs.device))
         bary_js = (1 - bary_is) * rand_like(bary_is)
         bary_ks = 1 - bary_is - bary_js
         barys = stack([bary_is, bary_js, bary_ks], dim=-1)
