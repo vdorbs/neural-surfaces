@@ -73,7 +73,7 @@ def load_obj_from_url(url: str) -> Tuple[Tensor, Tensor]:
     mesh = load_obj(buffer, maintain_order=True)
     return tensor(mesh['vertices']), tensor(mesh['faces'])
 
-def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_uvs: List[List[Tensor]]) -> str:
+def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_uvs: List[List[Tensor]], mode: str = 'checkerboard') -> str:
     """Creates HTML string for rendering textured meshes with Babylon.js
 
     Note:
@@ -125,7 +125,7 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
                     {dom_str}
                     <script>
                         {js_str}
-                        renderMeshes({all_positions}, {all_indices}, {all_uvs});
+                        renderMeshes({all_positions}, {all_indices}, {all_uvs}, "{mode}");
                     </script>
                 </body>
                 </html>

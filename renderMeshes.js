@@ -9,9 +9,16 @@ function addEventListeners(engine, canvas, scene) {
     });
 };
 
-function renderMeshes(all_positions, all_indices, all_uvs) {
+function renderMeshes(all_positions, all_indices, all_uvs, mode) {
     const engineCanvas = document.getElementById("engineCanvas");
     const engine = new BABYLON.Engine(engineCanvas, true);
+
+    var texture_url;
+    if (mode == "checkerboard") {
+        texture_url = "https://us.v-cdn.net/5021068/uploads/editor/ha/7frj09nru4zu.png";
+    } else if (mode == "turbo") {
+        texture_url = "https://1.bp.blogspot.com/-T2q4LV_VaTA/XVWYfIwvOVI/AAAAAAAAEcQ/aUciAXkV_QAuuZ1y5DcbstBcDr-Umw4kgCLcBGAs/s1600/image10.png";
+    };
 
     const rows = document.getElementsByClassName("row");
     var views = [];
@@ -30,7 +37,7 @@ function renderMeshes(all_positions, all_indices, all_uvs) {
             vertexData.applyToMesh(mesh);
 
             mat = new BABYLON.StandardMaterial("mat", scene);
-            mat.diffuseTexture = new BABYLON.Texture("https://us.v-cdn.net/5021068/uploads/editor/ha/7frj09nru4zu.png");
+            mat.diffuseTexture = new BABYLON.Texture(texture_url);
             mat.backFaceCulling = false;
             mesh.material = mat;
             
