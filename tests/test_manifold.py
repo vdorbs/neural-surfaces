@@ -12,14 +12,14 @@ meshes = OdedSteinMeshes()
 spot = meshes.spot()
 
 class TestManifold(TestCase):
-    # def test_meshes(self):
-    #     """Checks that available meshes are boundaryless with Euler characteristic 2"""
-    #     for name in meshes.names:
-    #         _, faces = getattr(meshes, name)()
-    #         m = Manifold(faces)
+    def test_meshes(self):
+        """Checks that available meshes are boundaryless with Euler characteristic 2"""
+        for name in meshes.names:
+            _, faces = getattr(meshes, name)()
+            m = Manifold(faces)
             
-    #         self.assertTrue(m.is_boundary_halfedge.sum().item() == 0)
-    #         self.assertTrue(m.euler_char == 2)
+            self.assertTrue(m.is_boundary_halfedge.sum().item() == 0)
+            self.assertTrue(m.euler_char == 2)
 
     def test_embedding_to_halfedge_vectors(self):
         """Checks that halfedge vectors sum to 0 around faces"""
