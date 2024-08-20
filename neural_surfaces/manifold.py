@@ -491,3 +491,46 @@ class Manifold(Module):
         As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
         return As
     
+    def sphere_embedding_to_locator(self, sphere_fs: Tensor) -> Callable[[Tensor], Tuple[Tensor, Tensor]]:
+        """Precomputes data needed for sphere locator, which computes face indices and barycentric coordinates for a spherical partition
+        
+        Args:
+            sphere_fs: num_vertices * 3 list of vertex positions on the unit sphere
+
+        Returns:
+            Function mapping a batch_dim * 3 list of query vertex positions to a batch_dims list of face indices and a batch_dims * 3 list of barycentric coordinates
+        """
+        Ns = self.embedding_to_face_normals(sphere_fs)
+        sphere_fs_by_face = sphere_fs[self.faces]
+        halfspace_normals_by_face = cross(sphere_fs_by_face, sphere_fs_by_face[:, tensor([1, 2, 0]), :], dim=-1)
+        halfspace_normals_by_face = halfspace_normals_by_face / norm(halfspace_normals_by_face, dim=-1, keepdims=True)
+
+        def locator(query: Tensor) -> Tuple[Tensor, Tensor]:
+            """Locates query points by face index and barycentric coordinates
+            
+            Args:
+                query (Tensor): batch_dims * 3 list of query points on the sphere
+
+            Returns:
+                batch_dims list of face indices and batch_dims * 3 list of corresponding barycentric coordinates
+            """
+            batch_dims = query.shape[:-1]
+            reshaped_halfspace_normals_by_face = halfspace_normals_by_face.reshape(tuple(1 for _ in batch_dims) + halfspace_normals_by_face.shape)
+            reshaped_query = query.reshape(batch_dims + (1, 1, 3))
+            query_halfspace_magnitudes_by_face = (reshaped_halfspace_normals_by_face * reshaped_query).sum(dim=-1)
+            query_memberships_by_face = (query_halfspace_magnitudes_by_face >= 0).all(dim=-1)
+            face_idxs = (arange(self.num_faces) * query_memberships_by_face).sum(dim=-1)
+
+            query_Ns = Ns[face_idxs]
+            query_sphere_fs_by_face = sphere_fs_by_face[face_idxs]
+            query_proj_mag = (query_Ns * query_sphere_fs_by_face[..., 0, :]).sum(dim=-1, keepdims=True) / (query_Ns * query).sum(dim=-1, keepdims=True)
+            proj_query = query_proj_mag * query
+
+            query_subareas = norm(cross(query_sphere_fs_by_face - query_sphere_fs_by_face[..., tensor([1, 2, 0]), :], proj_query.unsqueeze(-2) - query_sphere_fs_by_face), dim=-1) / 2
+            query_subareas = query_subareas[..., tensor([1, 2, 0])]
+            barys = query_subareas / query_subareas.sum(dim=-1, keepdims=True)
+
+            return face_idxs, barys
+                
+        return locator
+    
