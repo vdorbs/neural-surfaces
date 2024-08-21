@@ -15,7 +15,7 @@ function renderMeshes(all_positions, all_indices, all_uvs, mode) {
 
     const rows = document.getElementsByClassName("row");
     var views = [];
-    var i, j, canvases, scene, vertexData, view, env;
+    var i, j, canvases, scene, vertexData, view, env, extraLight;
     for (i = 0; i < rows.length; i++) {
         canvases = rows[i].getElementsByTagName("canvas");
         for (j = 0; j < canvases.length; j++) {
@@ -46,6 +46,10 @@ function renderMeshes(all_positions, all_indices, all_uvs, mode) {
             scene.cameras[0].beta = 1.25;
             view = engine.registerView(canvases[j], scene.cameras[0]);
             views.push(view);
+
+            extraLight = new BABYLON.HemisphericLight("extraLight", new BABYLON.Vector3(0, -1, 0), scene);
+            scene.lights[0].intensity = 0.8;
+            scene.lights[1].intensity = 0.3;
 
             env = scene.createDefaultEnvironment({enableGroundMirror: true});
             env.setMainColor(BABYLON.Color3.White());

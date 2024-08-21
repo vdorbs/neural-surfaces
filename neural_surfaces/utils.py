@@ -159,7 +159,12 @@ def serve_html(html_str: str, serve_locally: bool = True, port: int = 8000):
             s.connect(('8.8.8.8', 80))
             ip = s.getsockname()[0]
 
-    with TCPServer((ip, port), Handler) as httpd:
+    with TCPServer((ip, port), Handler, bind_and_activate=False) as httpd:
+        # Allow quicker startups after shutdowns
+        httpd.allow_reuse_address = True
+        httpd.server_bind()
+        httpd.server_activate()
+
         print(f'Serving at http://{ip}:{port}')
         httpd.serve_forever()
 
