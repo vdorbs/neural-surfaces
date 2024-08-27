@@ -2,9 +2,12 @@ from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
 from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
-from torch import arange, float64, stack, Tensor, tensor, zeros_like
+from scipy.sparse import coo_matrix
+from scipy.sparse.linalg import factorized, spsolve
+from torch import arange, float64, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torchsparsegradutils import sparse_generic_solve
 from trimesh.exchange.obj import load_obj
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 from urllib.request import urlopen
 
 
@@ -136,6 +139,50 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
     
     return html_str
 
+def point_cloud_trajectories_and_mesh_to_html(x_trajs: Tensor, fs: Tensor, faces: Tensor, size: int, frames_per_update: int) -> str:
+    """Creates HTML string for rendering textured point cloud animations with Babylon.js
+    
+    Args:
+        x_trajs (Tensor): num_frames * num_points * 3 list of list of point cloud positions per point cloud animation frame
+        fs (Tensor): num_vertices * 3 list of vertex positions
+        faces (Tensor): num_faces * 3 list of vertices per face
+        size (int): size of each point in point cloud
+        frames_per_update (int): number of rendering frames to wait between point cloud updates
+
+
+    Returns:
+        HTML string, can be saved to a file or logged to a HTML-supported logger
+    """
+    frames = x_trajs.tolist()
+    positions = fs.flatten().tolist()
+    indices = faces.flatten().tolist()
+
+    with open('renderPointCloudAnimation.js') as f:
+        js_str = f.read()
+
+    html_str = f"""<!DOCTYPE html>
+                <html>
+                <head>
+                    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+                    <style>
+                        canvas#renderCanvas {{
+                            width: 100vw;
+                            height: 100vh;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <canvas id="renderCanvas"></canvas>
+                    <script>
+                        {js_str}
+                        renderPointCloudAnimation({frames}, {positions}, {indices}, {size}, {frames_per_update});
+                    </script>
+                </body>
+                </html>
+                """
+    
+    return html_str
+
 def serve_html(html_str: str, serve_locally: bool = True, port: int = 8000):
     """Starts a server which serves a specified HTML string
     
@@ -195,3 +242,33 @@ def create_rectangular_mesh(num_rows: int, num_cols: int, is_2d: bool = False) -
     faces = tensor(faces)
 
     return vertices, faces
+
+def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
+    """Solves sparse linear system AX = B for symmetric A
+    
+    Args:
+        A (sparse_coo_tensor): sparse symmetric n * n matrix
+        B (Tensor): dense n * m matrix
+
+    Returns:
+        Dense n * m matrix
+    """
+    def backbone_solver(A: sparse_coo_tensor, B: Tensor) -> Tensor:
+        scipy_A = coo_matrix((A.values().cpu(), tuple(A.indices().cpu())), shape=A.shape)
+        scipy_B = B.cpu().numpy()
+        return tensor(spsolve(scipy_A, scipy_B), device=A.device)
+    
+    return sparse_generic_solve(A, B, solve=backbone_solver)
+
+def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
+    scipy_A = coo_matrix((A.values().cpu(), tuple(A.indices().cpu())), shape=A.shape)
+    scipy_solver = factorized(scipy_A)
+
+    def backbone_solver(A: sparse_coo_tensor, B: Tensor) -> Tensor:
+        scipy_B = B.cpu().numpy()
+        return tensor(scipy_solver(scipy_B), device=A.device)
+    
+    def solver(B: Tensor) -> Tensor:
+        return sparse_generic_solve(A, B, solve=backbone_solver)
+
+    return solver
