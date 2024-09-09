@@ -1,8 +1,8 @@
+from neural_surfaces.utils import sparse_solve
 from torch import arange, arccos, cat, diff, eye, float64, maximum, minimum, multinomial, ones, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
 from torch.linalg import cross, norm
 from torch.nn import Module
 from torch.sparse import spdiags
-from torchsparsegradutils import sparse_generic_solve
 from typing import Callable, Tuple
 
 
@@ -201,14 +201,13 @@ class Manifold(Module):
         """
         return fs[..., self.tips_to_halfedges, :] - fs[..., self.tails_to_halfedges, :]
     
-    def embedding_to_heat_method_solver(self, fs: Tensor, use_diag_mass: bool = False, diff_coeff: float = 1., eps: float = 1e-6) -> Callable[[Tensor], Tensor]:
+    def embedding_to_heat_method_solver(self, fs: Tensor, use_diag_mass: bool = False, diff_coeff: float = 1.) -> Callable[[Tensor, bool, Tensor], Tensor]:
         """Precomputes data needed for heat method solver, which computes approximates distances
 
         Args:
             fs (Tensor): num_vertices * 3 list of vertex positions
             use_diag_mass (bool): whether mass matrix is diagonal/lumped
             diff_coeff (float): coefficient of diffusion, higher coefficient smooths distance more
-            eps (float): scalar multiple of identity added to Laplacian in final Poisson equation solve
 
         Returns:
             Function mapping a num_source list of vertex indices to a num_sources * num_vertices list of geodesic distances 
@@ -222,7 +221,10 @@ class Manifold(Module):
         M = self.face_areas_to_mass_matrix(face_As, use_diag_mass=use_diag_mass)
         h = self.halfedge_vectors_to_metric(es).mean() ** 2
         A = (M - h * diff_coeff * L).coalesce()
-        L_eps = (L - eps * spdiags(ones(self.num_vertices, dtype=fs.dtype), tensor(0), shape=L.shape)).coalesce()
+        
+        indices = L.indices()
+        is_free = (indices != 0).all(dim=0)
+        L_def = sparse_coo_tensor(indices[:, is_free] - 1, L.values()[is_free], size=(self.num_vertices - 1, self.num_vertices - 1)).coalesce()
 
         es_by_face = es[..., self.halfedges_to_faces, :]
         rot_es_by_face = cross(Ns.unsqueeze(-2), es_by_face)
@@ -231,27 +233,35 @@ class Manifold(Module):
         if use_diag_mass:
             vertex_As = M.values()
 
-        def heat_method_solver(source_idxs: Tensor) -> Tensor:
-            """Computes geodesic distance from specified source vertices to all other vertices
+        def heat_method_solver(source_idxs: Tensor, use_vertex_sources: bool = True, barys: Tensor = None) -> Tensor:
+            """Computes geodesic distance from specified sources to all other vertices
             
             Args:
-                source_idxs (Tensor): list of num_sources vertex indices
+                source_idxs (Tensor): list of num_sources vertex/face indices
+                use_vertex_sources (bool): whether to use vertices or points within faces as sources
+                barys (Tensor): list of num_sources * 3 barycentric coordinates of sources if not using vertex sources
 
             Returns:
                 num_sources * num_vertices list of geodesic distances
             """
             u_0s = zeros(self.num_vertices, len(source_idxs), dtype=fs.dtype)
             for j, source_idx in enumerate(source_idxs):
-                u_0s[source_idx, j] = 1.
+                if use_vertex_sources:
+                    u_0s[source_idx, j] = 1.
+                else:
+                    u_0s[self.faces[source_idx], j] = barys[j]
 
-            u_hs = sparse_generic_solve(A, u_0s)
+            u_hs = sparse_solve(A, M @ u_0s)
             u_hs_by_face = u_hs[self.tails_to_halfedges][self.halfedges_to_faces]
             eiko_field = (u_hs_by_face.unsqueeze(-1) * basis_grads_by_face.unsqueeze(-2)).sum(dim=-3)
             eiko_field = -eiko_field / norm(eiko_field, dim=-1, keepdims=True)
             eiko_field = eiko_field.transpose(0, 1)
             div_eiko_field = -(self.halfedges_to_tails @ (rot_es_by_face.unsqueeze(0) * eiko_field.unsqueeze(-2)).sum(dim=-1)[..., tensor([1, 2, 0])].flatten(start_dim=-2)[:, self.faces_to_halfedges].T) / 2
-            dists = sparse_generic_solve(L_eps, div_eiko_field)
+            
+            free_dists = sparse_solve(L_def, div_eiko_field[1:])
+            dists = cat([zeros(1, len(source_idxs), dtype=float64), free_dists])
             dists = dists - dists.min(dim=0, keepdims=True).values
+
             return dists
 
         return heat_method_solver

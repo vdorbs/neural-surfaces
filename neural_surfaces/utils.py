@@ -258,7 +258,7 @@ def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
         scipy_B = B.cpu().numpy()
         return tensor(spsolve(scipy_A, scipy_B), device=A.device)
     
-    return sparse_generic_solve(A, B, solve=backbone_solver)
+    return sparse_generic_solve(A, B, solve=backbone_solver, transpose_solve=backbone_solver)
 
 def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
     scipy_A = coo_matrix((A.values().cpu(), tuple(A.indices().cpu())), shape=A.shape)
@@ -269,6 +269,6 @@ def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
         return tensor(scipy_solver(scipy_B), device=A.device)
     
     def solver(B: Tensor) -> Tensor:
-        return sparse_generic_solve(A, B, solve=backbone_solver)
+        return sparse_generic_solve(A, B, solve=backbone_solver, transpose_solve=backbone_solver)
 
     return solver
