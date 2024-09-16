@@ -76,7 +76,7 @@ def load_obj_from_url(url: str) -> Tuple[Tensor, Tensor]:
     mesh = load_obj(buffer, maintain_order=True)
     return tensor(mesh['vertices']), tensor(mesh['faces'])
 
-def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_uvs: List[List[Tensor]], mode: str = 'none') -> str:
+def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_Ns: List[List[Tensor]], all_uvs: List[List[Tensor]], y_up: bool = True, mode: str = 'none') -> str:
     """Creates HTML string for rendering textured meshes with Babylon.js
 
     Note:
@@ -87,7 +87,9 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
     Args:
         all_fs (List[List[Tensor]]): num_rows list of num_cols lists of num_vertices * 3 lists of vertex positions
         all_faces (List[List[Tensor]]): num_rows list of num_cols lists of num_faces * 3 lists of vertices per face
+        all_Ns (List[List[Tensor]]): num_rows list of num_cols list of num_vertices * 3 lists of vertex normals
         all_uvs (List[List[Tensor]]): num_rows list of num_cols lists of num_vertices * 2 lists of uv coordinates per vertex
+        y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
         mode (str): whether rendered texture is 'checkerboard', 'turbo' (rainbow colormap), or 'none' (single color)
 
     Returns:
@@ -97,8 +99,11 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
     num_rows = len(all_fs)
     num_cols = len(all_fs[0])
 
-    all_positions = [[fs.flatten().tolist() for fs in fs_row] for fs_row in all_fs]
+    perm = tensor([0, 1, 2]) if y_up else tensor([1, 2, 0])
+
+    all_positions = [[fs[:, perm].flatten().tolist() for fs in fs_row] for fs_row in all_fs]
     all_indices = [[faces.flatten().tolist() for faces in faces_row] for faces_row in all_faces]
+    all_normals = [[Ns[:, perm].flatten().tolist() for Ns in Ns_row] for Ns_row in all_Ns]
     all_uvs = [[uvs.flatten().tolist() for uvs in uvs_row] for uvs_row in all_uvs]
 
     with open('renderMeshes.js') as f:
@@ -131,7 +136,7 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
                     {dom_str}
                     <script>
                         {js_str}
-                        renderMeshes({all_positions}, {all_indices}, {all_uvs}, "{mode}");
+                        renderMeshes({all_positions}, {all_indices}, {all_normals}, {all_uvs}, "{mode}");
                     </script>
                 </body>
                 </html>

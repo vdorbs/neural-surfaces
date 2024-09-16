@@ -9,7 +9,7 @@ function addEventListeners(engine, canvas, scene) {
     });
 };
 
-function renderMeshes(all_positions, all_indices, all_uvs, mode) {
+function renderMeshes(all_positions, all_indices, all_normals, all_uvs, mode) {
     const engineCanvas = document.getElementById("engineCanvas");
     const engine = new BABYLON.Engine(engineCanvas, true);
 
@@ -25,7 +25,8 @@ function renderMeshes(all_positions, all_indices, all_uvs, mode) {
             mesh = new BABYLON.Mesh("mesh", scene);
             vertexData = new BABYLON.VertexData();
             vertexData.positions = all_positions[i][j];
-            vertexData.indices = all_indices[i][j]
+            vertexData.indices = all_indices[i][j];
+            vertexData.normals = all_normals[i][j];
             vertexData.uvs = all_uvs[i][j];
             vertexData.applyToMesh(mesh);
 
@@ -33,7 +34,7 @@ function renderMeshes(all_positions, all_indices, all_uvs, mode) {
             mat.backFaceCulling = false;
 
             if (mode == "checkerboard") {
-                mat.diffuseTexture = new BABYLON.Texture("https://us.v-cdn.net/5021068/uploads/editor/ha/7frj09nru4zu.png");
+                mat.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/g7C6P1m.png");
             } else if (mode == "turbo") {
                 mat.diffuseTexture = new BABYLON.Texture("https://1.bp.blogspot.com/-T2q4LV_VaTA/XVWYfIwvOVI/AAAAAAAAEcQ/aUciAXkV_QAuuZ1y5DcbstBcDr-Umw4kgCLcBGAs/s1600/image10.png");
             } else if (mode == "none") {

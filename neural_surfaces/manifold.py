@@ -1,6 +1,6 @@
 from neural_surfaces.utils import sparse_solve
-from torch import arange, arccos, cat, diff, eye, float64, maximum, minimum, multinomial, ones, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
-from torch.linalg import cross, norm
+from torch import arange, arccos, cat, diagonal, diff, eye, float64, maximum, minimum, multinomial, ones, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
+from torch.linalg import det, cross, inv, norm
 from torch.nn import Module
 from torch.sparse import spdiags
 from typing import Callable, Tuple
@@ -21,18 +21,20 @@ class Manifold(Module):
         self.num_faces = len(faces)
         self.num_halfedges = 3 * self.num_faces
 
-        self.tails_to_halfedges = faces.clone().flatten()
-        self.tips_to_halfedges = faces.clone()[:, tensor([1, 2, 0])].flatten()
+        self.register_buffer('tails_to_halfedges', faces.clone().flatten())
+        self.register_buffer('tips_to_halfedges', faces.clone()[:, tensor([1, 2, 0])].flatten())
         self.halfedges_to_faces = arange(self.num_halfedges).reshape(self.num_faces, 3)
         self.faces_to_halfedges = arange(self.num_halfedges)
 
-        self.halfedges_to_tails = sparse_coo_tensor(stack([self.tails_to_halfedges, arange(self.num_halfedges)]), ones(self.num_halfedges, dtype=dtype))
+        col_idxs = arange(self.num_halfedges, device=self.tails_to_halfedges.device)
+        values = ones(self.num_halfedges, dtype=dtype, device=self.tails_to_halfedges.device)
+        self.register_buffer('halfedges_to_tails', sparse_coo_tensor(stack([self.tails_to_halfedges, col_idxs]), values))
 
         # Pair twin halfedges and find boundary halfedges (halfedges without a twin)
         tail_sorting = sort(self.tails_to_halfedges)
-        neighborhood_start_indicators = diff(tail_sorting.values, prepend=tensor([-1]))
-        neighborhood_start_idxs = arange(self.num_halfedges)[neighborhood_start_indicators == 1]
-        neighborhood_degrees = diff(neighborhood_start_idxs, append=tensor([self.num_halfedges]))
+        neighborhood_start_indicators = diff(tail_sorting.values, prepend=tensor([-1], device=self.tails_to_halfedges.device))
+        neighborhood_start_idxs = arange(self.num_halfedges, device=neighborhood_start_indicators.device)[neighborhood_start_indicators == 1]
+        neighborhood_degrees = diff(neighborhood_start_idxs, append=tensor([self.num_halfedges], device=neighborhood_start_idxs.device))
         all_neighborhood_data = stack([tail_sorting.indices, self.tips_to_halfedges[tail_sorting.indices]], dim=-1)
         all_neighborhood_data = [all_neighborhood_data[start_idx:(start_idx + degree)] for start_idx, degree in zip(neighborhood_start_idxs, neighborhood_degrees)]
         
@@ -185,10 +187,30 @@ class Manifold(Module):
     def embedding_to_face_normals(self, fs: Tensor, keep_scale: bool = False) -> Tensor:
         """Computes outward pointing face normals, either unit length or scaled by twice the face area
 
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+
         Returns:
             batch_dims * num_faces * 3 list of face normals
         """
         return self.halfedge_vectors_to_face_normals(self.embedding_to_halfedge_vectors(fs), keep_scale)
+
+    def embedding_to_frames(self, fs: Tensor) -> Tensor:
+        """Computes a frame per face, with first two columns representing edges and third representing face normal
+        
+        Args:
+            fs (Tensor): batch_dims * num_vertices * 3 list of vertex positions
+
+        Returns:
+            batch_dims * num_faces * 3 * 3 list of frames per face
+        """
+        es = self.embedding_to_halfedge_vectors(fs)
+        es_by_face = es[..., self.halfedges_to_faces, :]
+        us = es_by_face[..., 0, :]
+        vs = -es_by_face[..., 2, :]
+        Ns = cross(us, vs)
+        frames = stack([us, vs, Ns / sqrt(norm(Ns, dim=-1, keepdims=True))], dim=-1) # Partial normalization keeps frames well-conditioned
+        return frames
     
     def embedding_to_halfedge_vectors(self, fs: Tensor) -> Tensor:
         """Computes vectors pointing from halfedge tails to halfedge tips, where num_halfedges = 3 * num_faces
@@ -244,7 +266,7 @@ class Manifold(Module):
             Returns:
                 num_sources * num_vertices list of geodesic distances
             """
-            u_0s = zeros(self.num_vertices, len(source_idxs), dtype=fs.dtype)
+            u_0s = zeros(self.num_vertices, len(source_idxs)).to(fs)
             for j, source_idx in enumerate(source_idxs):
                 if use_vertex_sources:
                     u_0s[source_idx, j] = 1.
@@ -259,7 +281,7 @@ class Manifold(Module):
             div_eiko_field = -(self.halfedges_to_tails @ (rot_es_by_face.unsqueeze(0) * eiko_field.unsqueeze(-2)).sum(dim=-1)[..., tensor([1, 2, 0])].flatten(start_dim=-2)[:, self.faces_to_halfedges].T) / 2
             
             free_dists = sparse_solve(L_def, div_eiko_field[1:])
-            dists = cat([zeros(1, len(source_idxs), dtype=float64), free_dists])
+            dists = cat([zeros(1, len(source_idxs)).to(free_dists), free_dists])
             dists = dists - dists.min(dim=0, keepdims=True).values
 
             return dists
@@ -333,6 +355,17 @@ class Manifold(Module):
         samples = flat_samples.reshape(batch_dims + (num_samples, 3))
         
         return face_idxs, barys, samples
+
+    def embedding_to_vertex_normals(self, fs: Tensor, keep_scale: bool = False) -> Tensor:
+        fs_by_face = fs[..., self.faces, :]
+        crosses_by_face = cross(fs_by_face, fs_by_face[..., tensor([1, 2, 0]), :])
+        vertex_Ns = self.halfedges_to_tails @ crosses_by_face[..., tensor([1, 2, 0]), :].flatten(start_dim=-3, end_dim=-2)[..., self.faces_to_halfedges, :] / 6
+        
+        if keep_scale:
+            return vertex_Ns
+
+        vertex_Ns = vertex_Ns / norm(vertex_Ns, dim=-1, keepdims=True)
+        return vertex_Ns
     
     def face_areas_to_mass_matrix(self, As: Tensor, use_diag_mass: bool = False) -> sparse_coo_tensor:
         """Computes mass matrix from face areas
@@ -346,7 +379,7 @@ class Manifold(Module):
         """
         if use_diag_mass:
             vertex_As = self.face_areas_to_vertex_areas(As)
-            indices = arange(self.num_vertices)
+            indices = arange(self.num_vertices, device=As.device)
             indices = stack([indices, indices])
             M = sparse_coo_tensor(indices, vertex_As, size=(self.num_vertices, self.num_vertices), is_coalesced=True)
         else:
@@ -410,6 +443,36 @@ class Manifold(Module):
         self.faces_to_halfedges[(3 * face):(3 * (face + 1))] = self.halfedges_to_faces[face]
         self.faces_to_halfedges[(3 * twin_face):(3 * (twin_face + 1))] = self.halfedges_to_faces[twin_face]
     
+    def frames_to_singular_values(self, base_frames: Tensor, deform_frames: Tensor) -> Tensor:
+        """Computes singular values for each face through a deformation, excluding the singular value associated with normal vectors
+        
+        Args:
+            base_frames (Tensor): batch_size * num_faces * 3 * 3 list of frames for base surface
+            deform_frames (Tensor): batch_size * num_faces * 3 * 3 list of frames for deformed surface
+
+        Returns:
+            batch_size * num_faces * 2 list of singular values in descending order per face
+        """
+        jacs = deform_frames @ inv(base_frames)
+        jac_prods = jacs @ jacs.transpose(-2, -1)
+        traces = diagonal(jac_prods, dim1=-2, dim2=-1).sum(dim=-1)
+        dets = det(jac_prods)
+
+        base_normal_mags = norm(base_frames[..., -1], dim=-1)
+        deform_normal_mags = norm(deform_frames[..., -1], dim=-1)
+        ratios = (deform_normal_mags / base_normal_mags) ** 2
+
+        bs = ratios - traces
+        cs = dets / ratios
+        discrims = bs ** 2 - 4 * cs
+        discrims = maximum(discrims, tensor(0).to(discrims))
+        squared_sigma_highs = (-bs + sqrt(discrims)) / 2
+        squared_sigma_lows = (-bs - sqrt(discrims)) / 2
+        squared_sigmas = stack([squared_sigma_highs, squared_sigma_lows], dim=-1)
+        squared_sigmas = maximum(squared_sigmas, tensor(0).to(squared_sigmas))
+        sigmas = sqrt(squared_sigmas)
+        return sigmas
+
     def halfedge_vectors_to_angles(self, es: Tensor) -> Tensor:
         """Computes angles across from each halfedge
 
@@ -529,7 +592,7 @@ class Manifold(Module):
             reshaped_query = query.reshape(batch_dims + (1, 1, 3))
             query_halfspace_magnitudes_by_face = (reshaped_halfspace_normals_by_face * reshaped_query).sum(dim=-1)
             query_memberships_by_face = (query_halfspace_magnitudes_by_face >= 0).all(dim=-1)
-            face_idxs = (arange(self.num_faces) * query_memberships_by_face).sum(dim=-1)
+            face_idxs = (arange(self.num_faces, device=query_memberships_by_face.device) * query_memberships_by_face).sum(dim=-1)
 
             query_Ns = Ns[face_idxs]
             query_sphere_fs_by_face = sphere_fs_by_face[face_idxs]

@@ -1,3 +1,4 @@
+from e3nn.o3 import rand_matrix
 from neural_surfaces import Manifold
 from neural_surfaces.utils import OdedSteinMeshes
 from potpourri3d import cotan_laplacian
@@ -142,6 +143,14 @@ class TestManifold(TestCase):
         recon_query = (sphere_fs[m.faces[face_idxs]] * barys.unsqueeze(-1)).sum(dim=-2)
         recon_query /= norm(recon_query, dim=-1, keepdims=True)
         assert_close(recon_query, query)
+
+    def test_arap(self):
+        fs, faces = spot
+        m = Manifold(faces)
+        R = rand_matrix(dtype=float64)
+        R_fs = fs @ R.T
+        sigmas = m.frames_to_singular_values(m.embedding_to_frames(fs), m.embedding_to_frames(R_fs))
+        assert_close(sigmas, ones_like(sigmas))
 
 if __name__ == '__main__':
     main()
