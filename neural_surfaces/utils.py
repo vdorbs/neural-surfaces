@@ -144,23 +144,27 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
     
     return html_str
 
-def point_cloud_trajectories_and_mesh_to_html(x_trajs: Tensor, fs: Tensor, faces: Tensor, size: int, frames_per_update: int) -> str:
+def point_cloud_trajectories_and_mesh_to_html(x_trajs: Tensor, radii: float, frame_rate: float, fs: Tensor, faces: Tensor, Ns: Tensor, y_up: bool = True) -> str:
     """Creates HTML string for rendering textured point cloud animations with Babylon.js
     
     Args:
         x_trajs (Tensor): num_frames * num_points * 3 list of list of point cloud positions per point cloud animation frame
+        radii (float): radius of each sphere in point cloud
+        frame_rate (float): frames per second for point cloud animation
         fs (Tensor): num_vertices * 3 list of vertex positions
         faces (Tensor): num_faces * 3 list of vertices per face
-        size (int): size of each point in point cloud
-        frames_per_update (int): number of rendering frames to wait between point cloud updates
-
+        Ns (Tensor): num_vertices * 3 lists of vertex normals
+        y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
 
     Returns:
         HTML string, can be saved to a file or logged to a HTML-supported logger
     """
-    frames = x_trajs.tolist()
-    positions = fs.flatten().tolist()
+    perm = tensor([0, 1, 2]) if y_up else tensor([1, 2, 0])
+    
+    frames = x_trajs[..., perm].tolist()
+    positions = fs[:, perm].flatten().tolist()
     indices = faces.flatten().tolist()
+    normals = Ns[:, perm].flatten().tolist()
 
     with open('renderPointCloudAnimation.js') as f:
         js_str = f.read()
@@ -180,7 +184,7 @@ def point_cloud_trajectories_and_mesh_to_html(x_trajs: Tensor, fs: Tensor, faces
                     <canvas id="renderCanvas"></canvas>
                     <script>
                         {js_str}
-                        renderPointCloudAnimation({frames}, {positions}, {indices}, {size}, {frames_per_update});
+                        renderPointCloudAnimation({frames}, {radii}, {frame_rate}, {positions}, {indices}, {normals});
                     </script>
                 </body>
                 </html>
