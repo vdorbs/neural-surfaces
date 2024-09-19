@@ -144,8 +144,60 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
     
     return html_str
 
+def mesh_trajectories_to_html(fs_traj: Tensor, faces: Tensor, Ns_traj: Tensor, uvs: Tensor, y_up: bool = True, mode: str = 'none') -> str:
+    """Creates HTML string for rendering textured mesh animations with Babylon.js
+
+    Note:
+        If 'turbo' is selected as mode, v coordinate is unused
+        If 'none' is selected as mode, both u and v coordinates are unused
+
+    Args:
+        fs_traj (Tensor): num_frames * num_vertices * 3 list of list of vertex positions per animation frame
+        faces (Tensor): num_faces * 3 list of vertices per face
+        Ns_traj (Tensor): num_frames * num_vertices * 3 list of list of vertex normals per animation frame
+        uvs (Tensor): num_vertices * 2 list of uv coordinates per vertex
+        y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
+        mode (str): whether rendered texture is 'checkerboard', 'turbo' (rainbow colormap), or 'none' (single color)
+
+    Returns:
+        HTML string, can be saved to a file or logged to a HTML-supported logger
+    """
+
+    perm = tensor([0, 1, 2]) if y_up else tensor([1, 2, 0])
+
+    position_frames = fs_traj[..., perm].flatten(start_dim=-2).tolist()
+    indices = faces.flatten().tolist()
+    normal_frames = Ns_traj[..., perm].flatten(start_dim=-2).tolist()
+    uvs = uvs.flatten().tolist()
+    
+    with open('renderMeshAnimation.js') as f:
+        js_str = f.read()
+
+    html_str = f"""<!DOCTYPE html>
+                <html>
+                <head>
+                    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+                    <style>
+                        canvas#renderCanvas {{
+                            width: 100vw;
+                            height: 100vh;
+                        }}
+                    </style>
+                </head>
+                <body>
+                    <canvas id="renderCanvas"></canvas>
+                    <script>
+                        {js_str}
+                        renderMeshAnimation({position_frames}, {indices}, {normal_frames}, {uvs}, "{mode}");
+                    </script>
+                </body>
+                </html>
+                """
+    
+    return html_str
+
 def point_cloud_trajectories_and_mesh_to_html(x_trajs: Tensor, radii: float, frame_rate: float, fs: Tensor, faces: Tensor, Ns: Tensor, y_up: bool = True) -> str:
-    """Creates HTML string for rendering textured point cloud animations with Babylon.js
+    """Creates HTML string for rendering point cloud animations with Babylon.js
     
     Args:
         x_trajs (Tensor): num_frames * num_points * 3 list of list of point cloud positions per point cloud animation frame
@@ -153,7 +205,7 @@ def point_cloud_trajectories_and_mesh_to_html(x_trajs: Tensor, radii: float, fra
         frame_rate (float): frames per second for point cloud animation
         fs (Tensor): num_vertices * 3 list of vertex positions
         faces (Tensor): num_faces * 3 list of vertices per face
-        Ns (Tensor): num_vertices * 3 lists of vertex normals
+        Ns (Tensor): num_vertices * 3 list of vertex normals
         y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
 
     Returns:
