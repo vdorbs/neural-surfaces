@@ -13,7 +13,6 @@ function renderPointCloudAnimation(frames, radii, frameRate, positions, indices,
     mesh_mat = new BABYLON.StandardMaterial("mesh_mat", scene);
     mesh_mat.backFaceCulling = false;
     mesh_mat.diffuseColor = new BABYLON.Color3(0.678, 0.847, 0.902);
-    mesh_mat.alpha = 0.5;
     mesh.material = mesh_mat;
 
     allKeyFrames = [];
@@ -38,7 +37,7 @@ function renderPointCloudAnimation(frames, radii, frameRate, positions, indices,
         anim.setKeys(allKeyFrames[j]);
         sphere = spheres[j];
         sphere.animations.push(anim);
-        scene.beginAnimation(sphere, 0, frames.length / frameRate, true);
+        scene.beginAnimation(sphere, 0, frames.length, true);
     };
 
     scene.createDefaultCameraOrLight(true, true, true);
