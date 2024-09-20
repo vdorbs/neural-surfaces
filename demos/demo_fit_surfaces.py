@@ -115,7 +115,7 @@ def train(rank):
                 wandb.log({f'{name}/log_loss':log10(loss) for name, loss in zip(names, gathered_losses)})
 
     if args.output_path is not None:
-        save(model.state_dict, f'{args.output_path}/{names[rank]}.pt')
+        save(model.state_dict(), f'{args.output_path}/{names[rank]}.pt')
 
     # Gather reconstructions across devices
     all_recon_fs = [zeros(*fs.shape, dtype=fs.dtype, device=devices[rank]) for fs in all_fs]

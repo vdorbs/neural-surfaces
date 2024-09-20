@@ -1,7 +1,7 @@
 from argparse import ArgumentParser
 from neural_surfaces import Manifold
 from neural_surfaces.utils import meshes_to_html, point_cloud_trajectories_and_mesh_to_html, sparse_solve
-from potpourri3d import read_mesh
+from potpourri3d import read_mesh, write_mesh
 from torch import arcsin, atan2, cos, float64, inf, ones, pi, sinc, sqrt, stack, tensor
 from torch.autograd import grad
 from torch.linalg import norm
@@ -122,5 +122,8 @@ uniform_sphere = Sphere(subdivisions=3)
 uniform_sphere_fs = tensor(uniform_sphere.vertices)
 uniform_faces = tensor(uniform_sphere.faces)
 wandb.log(dict(anim=Html(point_cloud_trajectories_and_mesh_to_html(traj, 0.005, 5, uniform_sphere_fs, uniform_faces, uniform_sphere_fs))))
+
+if args.output_path is not None:
+    write_mesh(sphere_fs.numpy(), faces.numpy(), args.output_path)
 
 wandb.finish()

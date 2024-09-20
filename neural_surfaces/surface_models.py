@@ -1,4 +1,4 @@
-from torch import arange, cat, cos, float64, sin, stack, Tensor, tensor
+from torch import arange, cat, cos, float64, ones_like, sin, stack, Tensor, tensor
 from torch.autograd import grad, set_grad_enabled
 from torch.linalg import cross, norm
 from torch.nn import Linear, Module, ReLU, Sequential
@@ -82,4 +82,40 @@ class SphericalSurfaceModel(Module):
         N = (jac_crosses * x.unsqueeze(-2)).sum(dim=-1)
         N = N / norm(N, dim=-1, keepdims=True)
         return N
+    
+
+class SphericalVectorField(Module):
+    """Time-varying neural map from the unit sphere to its tangent space, compatible with odeint from torchdiffeq"""
+    def __init__(self, num_freqs: int, base_freq: float, hidden_dim: int, num_hidden_layers: int, dtype=float64):
+        """
+        Args:
+            num_freqs (int): number of frequencies per coordinate in harmonic embedding
+            base_freq (float): multiplier for all frequencies in harmonic embedding
+            num_hidden_layers (int): number of hidden layers in MLP
+        """
+        Module.__init__(self)
+
+        emb_dim = 4 * 2 * num_freqs
+        layers = [HarmonicEmbedding(num_freqs, base_freq, dtype=dtype), Linear(emb_dim, hidden_dim, dtype=dtype), ReLU()]
+        for _ in range(num_hidden_layers - 1):
+            layers += [Linear(hidden_dim, hidden_dim, dtype=dtype), ReLU()]
+        layers += [Linear(hidden_dim, 3, dtype=dtype)]
+        self.layers = Sequential(*layers)
+
+    def forward(self, t: Tensor, x: Tensor) -> Tensor:
+        """Maps query points on unit sphere and a single time to tangent vectors
+
+        Args:
+            t (Tensor): single time value
+            x (Tensor): batch_dims * 3 list of points on unit sphere
+
+        Returns:
+            batch_dims * 3 list of tangent vectors
+        """
+
+        t = t * ones_like(x[..., :1])
+        normalized_x = x / norm(x, dim=-1, keepdims=True)
+        v = self.layers(cat([t, normalized_x], dim=-1))
+        v = v - (normalized_x * v).sum(dim=-1, keepdims=True) * normalized_x
+        return v
     
