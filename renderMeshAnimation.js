@@ -1,4 +1,8 @@
-function renderMeshAnimation(position_frames, indices, normal_frames, uvs, mode) {
+function renderMeshAnimation(position_frames, indices, normal_frames, uvs, mode, loop_mode) {
+    if (loop_mode == undefined) {
+        loop_mode = 'cycle';
+    };
+
     const canvas = document.getElementById("renderCanvas");
     const engine = new BABYLON.Engine(canvas, true);
     const scene = new BABYLON.Scene(engine);
@@ -35,11 +39,27 @@ function renderMeshAnimation(position_frames, indices, normal_frames, uvs, mode)
     env.setMainColor(BABYLON.Color3.White());
 
     counter = 0
+    update = 1
     scene.registerBeforeRender(function() {
         vertexData.positions = position_frames[counter];
         vertexData.normals = normal_frames[counter];
         vertexData.applyToMesh(mesh);
-        counter = (counter + 1) % position_frames.length;
+
+        if (loop_mode == 'cycle') {
+            counter = (counter + 1) % position_frames.length;
+        };
+
+        if (loop_mode == 'yoyo') {
+            if (counter == position_frames.length) {
+                update = -1;
+            } else if (counter == 0) {
+                update = 1;
+            } else {
+                update = update;
+            }
+    
+            counter += update;
+        };        
     });
 
     engine.runRenderLoop(function() {

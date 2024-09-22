@@ -144,7 +144,7 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
     
     return html_str
 
-def mesh_trajectories_to_html(fs_traj: Tensor, faces: Tensor, Ns_traj: Tensor, uvs: Tensor, y_up: bool = True, mode: str = 'none') -> str:
+def mesh_trajectories_to_html(fs_traj: Tensor, faces: Tensor, Ns_traj: Tensor, uvs: Tensor, y_up: bool = True, mode: str = 'none', loop_mode: str = 'cycle') -> str:
     """Creates HTML string for rendering textured mesh animations with Babylon.js
 
     Note:
@@ -158,6 +158,7 @@ def mesh_trajectories_to_html(fs_traj: Tensor, faces: Tensor, Ns_traj: Tensor, u
         uvs (Tensor): num_vertices * 2 list of uv coordinates per vertex
         y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
         mode (str): whether rendered texture is 'checkerboard', 'turbo' (rainbow colormap), or 'none' (single color)
+        loop_mode (str): whether animation loops through a cycle with 'cycle' or reverses to the start with 'yoyo'
 
     Returns:
         HTML string, can be saved to a file or logged to a HTML-supported logger
@@ -188,7 +189,7 @@ def mesh_trajectories_to_html(fs_traj: Tensor, faces: Tensor, Ns_traj: Tensor, u
                     <canvas id="renderCanvas"></canvas>
                     <script>
                         {js_str}
-                        renderMeshAnimation({position_frames}, {indices}, {normal_frames}, {uvs}, "{mode}");
+                        renderMeshAnimation({position_frames}, {indices}, {normal_frames}, {uvs}, "{mode}", "{loop_mode}");
                     </script>
                 </body>
                 </html>
