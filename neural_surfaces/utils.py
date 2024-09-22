@@ -1,10 +1,12 @@
 from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
+from os import system
 from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
 from torch import arange, float64, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch.linalg import norm
 from torchsparsegradutils import sparse_generic_solve
 from trimesh.exchange.obj import load_obj
 from typing import Callable, Dict, List, Tuple
@@ -277,3 +279,34 @@ def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
         return sparse_generic_solve(A, B, solve=backbone_solver, transpose_solve=backbone_solver)
 
     return solver
+
+def ceps_parametrize(ceps_path, filename, output_filename) -> Tuple[Tensor, Tensor, Tensor]:
+    system(f'{ceps_path}/build/bin/spherical_uniformize {filename} --outputMeshFilename {output_filename}')
+    with open(output_filename) as f:
+        lines = f.read().split('\n')
+
+    fs = []
+    sphere_fs = []
+    faces = []
+    for line in lines:
+
+        if line[:2] == 'v ':
+            v = tensor(list(map(float, line.split(' ')[1:])))
+            fs.append(v)
+
+        elif line[:2] == 'vt':
+            v = tensor(list(map(float, line.split(' ')[1:])))
+            v = v[:3] / norm(v[:3])
+            sphere_fs.append(v)
+
+        elif line[:2] == 'f ':
+            f = line.split(' ')[1:]
+            f = [int(s.split('/')[0]) for s in f]
+            if len(f) == 3:
+                faces.append(tensor(f))
+            elif len(f) == 4:
+                i, j, k, l = f
+                faces.append(tensor([i, j, l]))
+                faces.append(tensor([k, l, j]))
+
+    return stack(sphere_fs), stack(fs), stack(faces) - 1
