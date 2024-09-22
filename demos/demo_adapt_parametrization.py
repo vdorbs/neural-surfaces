@@ -117,15 +117,13 @@ for step in pbar:
 
     wandb.log(log_dict, step + 1)
 
-<<<<<<< HEAD
 if args.output_path is not None:
     write_mesh(sphere_fs.numpy(), faces.numpy(), args.output_path)
-=======
+
 traj = stack(traj)
 uniform_sphere = Sphere(subdivisions=3)
 uniform_sphere_fs = tensor(uniform_sphere.vertices)
 uniform_faces = tensor(uniform_sphere.faces)
 wandb.log(dict(anim=Html(point_cloud_trajectories_and_mesh_to_html(traj, 0.005, 5, uniform_sphere_fs, uniform_faces, uniform_sphere_fs))))
->>>>>>> 3ff4ea61fa70939bd6c9adb93bd06fd5cbcf7275
 
 wandb.finish()
