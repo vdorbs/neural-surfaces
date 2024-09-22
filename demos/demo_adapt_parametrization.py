@@ -1,12 +1,13 @@
 from argparse import ArgumentParser
 from neural_surfaces import Manifold
-from neural_surfaces.utils import meshes_to_html, sparse_solve
+from neural_surfaces.utils import meshes_to_html, point_cloud_trajectories_and_mesh_to_html, sparse_solve
 from potpourri3d import read_mesh, write_mesh
 from torch import arcsin, atan2, cos, float64, inf, ones, pi, sinc, sqrt, stack, tensor
 from torch.autograd import grad
 from torch.linalg import norm
 from torch.sparse import spdiags
 from tqdm import tqdm
+from trimesh.primitives import Sphere
 import wandb
 from wandb import Html
 
@@ -19,6 +20,7 @@ parser.add_argument('--y_up', type=bool, default=False)
 parser.add_argument('--num_steps', type=int, default=100)
 parser.add_argument('--step_size', type=float, default=1e-3)
 parser.add_argument('--plot_every', type=int, default=10)
+parser.add_argument('--skip_frames', type=int, default=1)
 args = parser.parse_args()
 
 fs, faces = map(tensor, read_mesh(args.mesh_path))
@@ -52,6 +54,7 @@ def plot(sphere_fs):
 wandb.init()
 wandb.log(dict(param=plot(sphere_fs)), step=0)
 
+traj = [sphere_fs.clone()]
 pbar = tqdm(range(args.num_steps))
 for step in pbar:
     sphere_fs_with_grad = sphere_fs.clone().requires_grad_(True)
@@ -104,6 +107,9 @@ for step in pbar:
 
     sphere_fs = next_sphere_fs
 
+    if (step + 1) % args.skip_frames == 0:
+        traj.append(sphere_fs.clone())
+
     log_dict = dict(loss=sym_dir_energy)
 
     if (step + 1) % args.plot_every == 0:
@@ -111,7 +117,15 @@ for step in pbar:
 
     wandb.log(log_dict, step + 1)
 
+<<<<<<< HEAD
 if args.output_path is not None:
     write_mesh(sphere_fs.numpy(), faces.numpy(), args.output_path)
+=======
+traj = stack(traj)
+uniform_sphere = Sphere(subdivisions=3)
+uniform_sphere_fs = tensor(uniform_sphere.vertices)
+uniform_faces = tensor(uniform_sphere.faces)
+wandb.log(dict(anim=Html(point_cloud_trajectories_and_mesh_to_html(traj, 0.005, 5, uniform_sphere_fs, uniform_faces, uniform_sphere_fs))))
+>>>>>>> 3ff4ea61fa70939bd6c9adb93bd06fd5cbcf7275
 
 wandb.finish()

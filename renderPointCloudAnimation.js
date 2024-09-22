@@ -1,4 +1,4 @@
-function renderPointCloudAnimation(frames, positions, indices, framesPerUpdate) {
+function renderPointCloudAnimation(frames, radii, frameRate, positions, indices, normals) {
     const canvas = document.getElementById("renderCanvas");
     const engine = new BABYLON.Engine(canvas, true);
     const scene = new BABYLON.Scene(engine);
@@ -7,49 +7,48 @@ function renderPointCloudAnimation(frames, positions, indices, framesPerUpdate) 
     vertexData = new BABYLON.VertexData();
     vertexData.positions = positions;
     vertexData.indices = indices;
+    vertexData.normals = normals;
     vertexData.applyToMesh(mesh);
 
-    const mat = new BABYLON.StandardMaterial("mat", scene);
-    mat.backFaceCulling = false;
-    mat.diffuseColor = new BABYLON.Color3(0.678, 0.847, 0.902);
-    mesh.material = mat;
+    mesh_mat = new BABYLON.StandardMaterial("mesh_mat", scene);
+    mesh_mat.backFaceCulling = false;
+    mesh_mat.diffuseColor = new BABYLON.Color3(0.678, 0.847, 0.902);
+    mesh.material = mesh_mat;
 
-    const pointCloud = new BABYLON.PointsCloudSystem("pointCloud", 10, scene);
-    pointCloud.addPoints(frames[0].length, function(particle, i) {
-        const position = frames[0][i];
-        particle.position = new BABYLON.Vector3(position[0], position[1], position[2])
-        particle.color = new BABYLON.Color3(1, 0.843, 0);
-    });
-    pointCloud.buildMeshAsync()
-
-    pointCloud.updateParticle = function(particle) {
-        const position = frames[pointCloud.counter][particle.idx];
-        particle.position.x = position[0];
-        particle.position.y = position[1];
-        particle.position.z = position[2];
+    allKeyFrames = [];
+    spheres = [];
+    for (j = 0; j < frames[0].length; j++) {
+        allKeyFrames.push([]);
+        sphere = BABYLON.MeshBuilder.CreateSphere("sphere_" + j, {diameter: 2 * radii});
+        spheres.push(sphere);
     };
 
-    var step = 0;
-    pointCloud.afterUpdateParticles = function() {
-        step = (step + 1) % framesPerUpdate;
-        if (step === 0) {
-            pointCloud.counter = (pointCloud.counter + 1) % frames.length;
+    for (i = 0; i < frames.length; i++) {
+        frame = frames[i];
+        for (j = 0; j < frame.length; j++) {
+            position = frame[j];
+            vector = new BABYLON.Vector3(position[0], position[1], position[2]);
+            allKeyFrames[j].push({frame: i, value: vector});
         };
     };
 
-    scene.registerBeforeRender(function() {
-        pointCloud.setParticles(0, frames[0].length, true);
-    });
+    for (j = 0; j < frames[0].length; j++) {
+        anim = new BABYLON.Animation("anim_" + j, "position", frameRate, BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CYCLE);
+        anim.setKeys(allKeyFrames[j]);
+        sphere = spheres[j];
+        sphere.animations.push(anim);
+        scene.beginAnimation(sphere, 0, frames.length, true);
+    };
 
     scene.createDefaultCameraOrLight(true, true, true);
     scene.cameras[0].alpha = -Math.PI / 4;
     scene.cameras[0].beta = 1.25;
 
-    const extraLight = new BABYLON.HemisphericLight("extraLight", new BABYLON.Vector3(0, -1, 0), scene);
+    extraLight = new BABYLON.HemisphericLight("extraLight", new BABYLON.Vector3(0, -1, 0), scene);
     scene.lights[0].intensity = 0.8;
-    extraLight.intensity = 0.3;
+    scene.lights[1].intensity = 0.3;
 
-    const env = scene.createDefaultEnvironment({enableGroundMirror: true});
+    env = scene.createDefaultEnvironment({enableGroundMirror: true});
     env.setMainColor(BABYLON.Color3.White());
 
     engine.runRenderLoop(function() {
