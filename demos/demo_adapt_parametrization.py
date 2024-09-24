@@ -65,7 +65,7 @@ for step in pbar:
     grads, = grad(sym_dir_energy, sphere_fs_with_grad)
 
     L = manifold.embedding_to_laplacian(sphere_fs)
-    L_eps = -L + 1e-6 * spdiags(ones(manifold.num_vertices, dtype=float64), tensor(0), shape=(manifold.num_vertices, manifold.num_vertices))
+    L_eps = -L + 1e-4 * spdiags(ones(manifold.num_vertices, dtype=float64), tensor(0), shape=(manifold.num_vertices, manifold.num_vertices))
     grads = sparse_solve(L_eps.coalesce(), grads)
     
     curr_step_size = args.step_size
@@ -116,6 +116,9 @@ for step in pbar:
         log_dict['param'] = plot(sphere_fs)
 
     wandb.log(log_dict, step + 1)
+
+if args.output_path is not None:
+    write_mesh(sphere_fs.numpy(), faces.numpy(), args.output_path)
 
 traj = stack(traj)
 uniform_sphere = Sphere(subdivisions=3)

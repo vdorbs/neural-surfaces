@@ -1,6 +1,6 @@
 from neural_surfaces.utils import sparse_solve
-from torch import arange, arccos, cat, diagonal, diff, eye, float64, maximum, minimum, multinomial, ones, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
-from torch.linalg import det, cross, inv, norm
+from torch import arange, arccos, cat, diagonal, diff, eye, float64, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
+from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
 from typing import Callable, Tuple
@@ -366,6 +366,17 @@ class Manifold(Module):
 
         vertex_Ns = vertex_Ns / norm(vertex_Ns, dim=-1, keepdims=True)
         return vertex_Ns
+
+    def embeddings_to_rotation(self, fs: Tensor, target_fs: Tensor) -> Tensor:
+        normalized_fs = fs - self.embedding_to_com(fs)
+        normalized_fs = normalized_fs * sqrt(4 * pi / self.embedding_to_face_areas(normalized_fs).sum())
+
+        normalized_target_fs = target_fs - self.embedding_to_com(target_fs)
+        normalized_target_fs = normalized_target_fs * sqrt(4 * pi / self.embedding_to_face_areas(normalized_target_fs).sum())
+
+        U, _, V_T = svd(normalized_target_fs.transpose(-2, -1) @ normalized_fs)
+        R = U @ V_T
+        return R
     
     def face_areas_to_mass_matrix(self, As: Tensor, use_diag_mass: bool = False) -> sparse_coo_tensor:
         """Computes mass matrix from face areas
