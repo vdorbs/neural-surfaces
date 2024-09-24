@@ -152,5 +152,6 @@ class TestManifold(TestCase):
         sigmas = m.frames_to_singular_values(m.embedding_to_frames(fs), m.embedding_to_frames(R_fs))
         assert_close(sigmas, ones_like(sigmas))
 
+
 if __name__ == '__main__':
     main()

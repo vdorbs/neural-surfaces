@@ -4,7 +4,8 @@ from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
-from torch import arange, float64, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch import arange, arccos, clamp, cos, float64, nan, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch.linalg import norm
 from torchsparsegradutils import sparse_generic_solve
 from trimesh.exchange.obj import load_obj
 from typing import Callable, Dict, List, Tuple
@@ -333,3 +334,23 @@ def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
         return sparse_generic_solve(A, B, solve=backbone_solver, transpose_solve=backbone_solver)
 
     return solver
+
+def sphere_exp(x: Tensor, v: Tensor) -> Tensor:
+    norm_v = norm(v, dim=-1, keepdims=True)
+    return cos(norm_v) * x + sinc(norm_v / pi) * v
+
+def sphere_log(x: Tensor, y: Tensor, keep_scale: bool = True) -> Tensor:
+    cos_theta = (x * y).sum(dim=-1)
+    cos_theta = clamp(cos_theta, -1, 1)
+    theta = arccos(cos_theta)
+
+    unit_logs = zeros_like(x)
+    unit_logs[theta == pi] = nan
+    idxs = (theta > 0) * (theta < pi)
+    unit_logs[idxs] = (y[idxs] - cos_theta[idxs].unsqueeze(-1) * x[idxs]) / sin(theta[idxs]).unsqueeze(-1)
+
+    if keep_scale:
+        logs = theta.unsqueeze(-1) * unit_logs
+        return logs
+
+    return unit_logs  
