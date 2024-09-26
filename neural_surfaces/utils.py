@@ -1,3 +1,4 @@
+from cholespy import CholeskySolverD, MatrixType
 from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
 from os import system
@@ -5,7 +6,8 @@ from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
-from torch import arange, arccos, clamp, cos, float64, nan, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+import torch
+from torch import arange, arccos, chunk, clamp, cos, float64, nan, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
 from torch.linalg import norm
 from torchsparsegradutils import sparse_generic_solve
 from trimesh.exchange.obj import load_obj
@@ -307,37 +309,85 @@ def create_rectangular_mesh(num_rows: int, num_cols: int, is_2d: bool = False) -
 
     return vertices, faces
 
-def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
-    """Solves sparse linear system AX = B for symmetric A
+def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
+    """Performs sparse Cholesky factorization to solve linear system AX = B
+
+    Note:
+        For multi-GPU systems, the matrices A and B must have device rank 0. To use a device of a different rank, set the CUDA_VISIBLE_DEVICES environment variable.
+        If m > 128, the right hand side will be split into chunks, and each chunk will be processed separately.
     
     Args:
-        A (sparse_coo_tensor): sparse symmetric n * n matrix
-        B (Tensor): dense n * m matrix
+        A (sparse_coo_tensor): sparse n * n symmetric positive definite matrix
 
     Returns:
-        Dense n * m matrix
+        Function mapping a dense n * m right-hand side matrix to a dense n * m solution matrix
     """
-    def backbone_solver(A: sparse_coo_tensor, B: Tensor) -> Tensor:
-        scipy_A = coo_matrix((A.values().cpu(), tuple(A.indices().cpu())), shape=A.shape)
-        scipy_B = B.cpu().numpy()
-        return tensor(spsolve(scipy_A, scipy_B), device=A.device)
-    
-    return sparse_generic_solve(A, B, solve=backbone_solver, transpose_solve=backbone_solver)
-
-def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
-    scipy_A = coo_matrix((A.values().cpu(), tuple(A.indices().cpu())), shape=A.shape)
-    scipy_solver = factorized(scipy_A)
+    chol_solver = CholeskySolverD(len(A), *A.indices(), A.values(), MatrixType.COO)
 
     def backbone_solver(A: sparse_coo_tensor, B: Tensor) -> Tensor:
-        scipy_B = B.cpu().numpy()
-        return tensor(scipy_solver(scipy_B), device=A.device)
-    
+        num_rhs = B.shape[-1]
+        
+        if num_rhs > 128:
+            B_batches = chunk(B, (num_rhs // 128) + 1, dim=-1)
+            X_batches = []
+            for B_batch in B_batches:
+                B_batch = B_batch.contiguous()
+                X_batch = zeros_like(B_batch)
+                chol_solver.solve(B_batch, X_batch)
+                X_batches.append(X_batch)
+            X = torch.cat(X_batches, dim=-1)
+
+        else:
+            X = zeros_like(B)
+            chol_solver.solve(B, X)
+        
+        return X
+
     def solver(B: Tensor) -> Tensor:
+        """Solves the linear system AX = B
+
+        Args:
+            B (Tensor): dense n * m right-hand side matrix
+
+        Returns:
+            Dense n * m solution matrix
+        """
         return sparse_generic_solve(A, B, solve=backbone_solver, transpose_solve=backbone_solver)
 
     return solver
 
+def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
+    """Solves linear system AX = B
+
+    Note:
+        Each function call performs Cholesky factorization of A. To solve the linear system many times with different right-hand sides, use factorize
+        For multi-GPU systems, the matrices A and B must have device rank 0. To use a device of a different rank, set the CUDA_VISIBLE_DEVICES environment variable.
+        If B has more than 128 columns, the right hand side will be split into chunks, and each chunk will be processed separately.
+    
+    Args:
+        A (sparse_coo_tensor): sparse symmetric positive definite n * n matrix
+        B (Tensor): dense n * m right-hand side matrix
+
+    Returns:
+        Dense n * m solution matrix
+    """
+    solver = factorize(A)
+    return solver(B)
+
 def ceps_parametrize(ceps_path, filename, output_filename) -> Tuple[Tensor, Tensor, Tensor]:
+    """Runs spherical_uniformize from Discrete Conformal Equivalence of Polyhedral Surfaces (CEPS)
+
+    Note:
+        The file saved as output_filename stores the spherical parametrization as vertex texture quadruples, and the mesh may contain convex quadrilaterals.
+
+    Args:
+        ceps_path (str): path to CEPS directory
+        filename (str): path to input .obj file
+        output_filename (str): path for CEPS output
+
+    Returns:
+        num_vertices * 3 list of sphere vertex positions, num_vertices * 3 list of mesh vertex positions, and num_faces * 3 list of vertices per face
+    """
     system(f'{ceps_path}/build/bin/spherical_uniformize {filename} --outputMeshFilename {output_filename}')
     with open(output_filename) as f:
         lines = f.read().split('\n')
@@ -369,10 +419,29 @@ def ceps_parametrize(ceps_path, filename, output_filename) -> Tuple[Tensor, Tens
     return stack(sphere_fs), stack(fs), stack(faces) - 1
 
 def sphere_exp(x: Tensor, v: Tensor) -> Tensor:
+    """Computes sphere exponential
+
+    Args:
+        x (Tensor): batch_dims * 3 list of base points on sphere
+        v (Tensor): batch_dims * 3 list of tangent vectors to sphere at base points
+
+    Returns:
+        batch_dims * 3 list of translated points on sphere
+    """
     norm_v = norm(v, dim=-1, keepdims=True)
     return cos(norm_v) * x + sinc(norm_v / pi) * v
 
 def sphere_log(x: Tensor, y: Tensor, keep_scale: bool = True) -> Tensor:
+    """Computes inverse of sphere exponential
+
+    Args:
+        x (Tensor) batch_dims * 3 list of base points on sphere
+        y (Tensor) batch_dims * 3 list of non-antipodal points on sphere
+        keep_scale (bool): whether logs have true scale (geodesic distance between x and y) or are normalized
+
+    Returns:
+        batch_dims * 3 list of tangent vectors to sphere at base points
+    """
     cos_theta = (x * y).sum(dim=-1)
     cos_theta = clamp(cos_theta, -1, 1)
     theta = arccos(cos_theta)
