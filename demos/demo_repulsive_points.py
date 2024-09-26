@@ -78,7 +78,7 @@ for step in pbar:
 
     if (step + 1) % args.plot_every == 0:
         face_idxs, barys = locator(sphere_samples)
-        samples = (barys.unsqueeze(-1) * fs[faces[face_idxs]]).sum(dim=-2)
+        samples = (barys.unsqueeze(-1) * fs[manifold.faces[face_idxs]]).sum(dim=-2)
         frames.append(samples.clone().cpu())
         
 frames = stack(frames)
