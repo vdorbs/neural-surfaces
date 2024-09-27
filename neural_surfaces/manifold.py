@@ -1,5 +1,5 @@
 from __future__ import annotations
-from neural_surfaces.utils import sparse_solve
+from neural_surfaces.utils import factorize
 from torch import arange, arccos, cat, diagonal, diff, eye, float64, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
 from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
@@ -244,10 +244,12 @@ class Manifold(Module):
         M = self.face_areas_to_mass_matrix(face_As, use_diag_mass=use_diag_mass)
         h = self.halfedge_vectors_to_metric(es).mean() ** 2
         A = (M - h * diff_coeff * L).coalesce()
+        A_solver = factorize(A)
         
         indices = L.indices()
         is_free = (indices != 0).all(dim=0)
         L_def = sparse_coo_tensor(indices[:, is_free] - 1, L.values()[is_free], size=(self.num_vertices - 1, self.num_vertices - 1)).coalesce()
+        L_def_solver = factorize(-L_def)
 
         es_by_face = es[..., self.halfedges_to_faces, :]
         rot_es_by_face = cross(Ns.unsqueeze(-2), es_by_face)
@@ -274,14 +276,14 @@ class Manifold(Module):
                 else:
                     u_0s[self.faces[source_idx], j] = barys[j]
 
-            u_hs = sparse_solve(A, M @ u_0s)
+            u_hs = A_solver(M @ u_0s)
             u_hs_by_face = u_hs[self.tails_to_halfedges][self.halfedges_to_faces]
             eiko_field = (u_hs_by_face.unsqueeze(-1) * basis_grads_by_face.unsqueeze(-2)).sum(dim=-3)
             eiko_field = -eiko_field / norm(eiko_field, dim=-1, keepdims=True)
             eiko_field = eiko_field.transpose(0, 1)
             div_eiko_field = -(self.halfedges_to_tails @ (rot_es_by_face.unsqueeze(0) * eiko_field.unsqueeze(-2)).sum(dim=-1)[..., tensor([1, 2, 0])].flatten(start_dim=-2)[:, self.faces_to_halfedges].T) / 2
             
-            free_dists = sparse_solve(L_def, div_eiko_field[1:])
+            free_dists = -L_def_solver(div_eiko_field[1:])
             dists = cat([zeros(1, len(source_idxs)).to(free_dists), free_dists])
             dists = dists - dists.min(dim=0, keepdims=True).values
 
