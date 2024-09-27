@@ -1,3 +1,4 @@
+from __future__ import annotations
 from neural_surfaces.utils import sparse_solve
 from torch import arange, arccos, cat, diagonal, diff, eye, float64, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
 from torch.linalg import det, cross, inv, norm, svd
@@ -50,7 +51,7 @@ class Manifold(Module):
                 else:
                     self.is_boundary_halfedge[halfedge_idx] = True
 
-        self.num_edges = (self.num_halfedges - self.is_boundary_halfedge.sum()) // 2
+        self.num_edges = (self.num_halfedges + self.is_boundary_halfedge.sum()) // 2
         self.euler_char = (self.num_vertices - self.num_edges + self.num_faces).item()
 
     def angles_to_laplacian(self, alphas: Tensor):
@@ -574,7 +575,21 @@ class Manifold(Module):
         sps = (l_ijs + l_jks + l_kis) / 2
         As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
         return As
-    
+
+    def remove_vertex(self, idx: int = 0) -> Manifold:
+        """Removes a single vertex along with all incident faces
+        
+        Args:
+            idx (int): index of vertex to be removed
+
+        Returns:
+            Manifold with face removed
+        """
+        faces = self.faces.clone()
+        faces = faces[(faces != idx).all(dim=-1)]
+        faces -= (faces > idx).to(int)
+        return Manifold(faces)
+
     def sphere_embedding_to_locator(self, sphere_fs: Tensor) -> Callable[[Tensor], Tuple[Tensor, Tensor]]:
         """Precomputes data needed for sphere locator, which computes face indices and barycentric coordinates for a spherical partition
         
