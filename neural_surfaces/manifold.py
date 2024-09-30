@@ -73,6 +73,12 @@ class Manifold(Module):
 
         self.boundary_loops = boundary_loops
 
+        is_interior_vertex = ones(self.num_vertices, dtype=bool)
+        for boundary_loop in self.boundary_loops:
+            is_interior_vertex[boundary_loop] = False
+        self.is_interior_vertex = is_interior_vertex
+        self.boundary_vertices = arange(self.num_vertices)[~self.is_interior_vertex]
+
     def angles_to_laplacian(self, alphas: Tensor):
         """Computes cotan Laplacian from interior angles
 
@@ -264,10 +270,8 @@ class Manifold(Module):
         h = self.halfedge_vectors_to_metric(es).mean() ** 2
         A = (M - h * diff_coeff * L).coalesce()
         A_solver = factorize(A)
-        
-        indices = L.indices()
-        is_free = (indices != 0).all(dim=0)
-        L_def = sparse_coo_tensor(indices[:, is_free] - 1, L.values()[is_free], size=(self.num_vertices - 1, self.num_vertices - 1)).coalesce()
+
+        L_def = self.laplacian_to_definite_laplacian(L)
         L_def_solver = factorize(-L_def)
 
         es_by_face = es[..., self.halfedges_to_faces, :]
@@ -390,6 +394,7 @@ class Manifold(Module):
         Returns:
             num_vertices * 2 list of planar vertex positions
         """
+        assert len(self.boundary_loops) == 1
         boundary_vertices = self.boundary_loops[0]
         boundary_fs = fs[boundary_vertices]
         boundary_ls = norm(diff(cat([boundary_fs, boundary_fs[..., :1, :]], dim=-2), dim=-2), dim=-1)
@@ -398,27 +403,18 @@ class Manifold(Module):
         boundary_zs = cat([boundary_zs[..., -1:], boundary_zs[..., :-1]], dim=-1)
         boundary_uvs = stack([boundary_zs.real, boundary_zs.imag], dim=-1)
 
-        is_int_vertex = ones(self.num_vertices, dtype=bool)
-        is_int_vertex[boundary_vertices] = False
-        
         L = self.embedding_to_laplacian(fs)
-        indices = L.indices()
-        is_int_index = (indices.unsqueeze(-1) != boundary_vertices.reshape(1, 1, -1)).all(dim=-1).all(dim=0)
-        int_indices = indices[:, is_int_index]
-        int_indices = int_indices - (int_indices.unsqueeze(-1) > boundary_vertices.reshape(1, 1, -1)).sum(dim=-1)
-        int_values = L.values()[is_int_index]
-        num_int_vertices = self.num_vertices - len(boundary_vertices)
-        L_int = sparse_coo_tensor(int_indices, int_values, (num_int_vertices, num_int_vertices)).coalesce()
+        L_int = self.laplacian_to_interior_laplacian(L)
         L_int_solver = factorize(-L_int)
 
         x_bc = zeros_like(fs[..., :2])
         x_bc[..., boundary_vertices, :] = boundary_uvs
         y = L @ x_bc
-        x_int = -L_int_solver(-(L @ x_bc)[..., is_int_vertex, :])
+        x_int = -L_int_solver(-(L @ x_bc)[..., self.is_interior_vertex, :])
 
         uvs = zeros_like(x_bc)
         uvs[..., boundary_vertices, :] = boundary_uvs
-        uvs[..., is_int_vertex, :] = x_int
+        uvs[..., self.is_interior_vertex, :] = x_int
         return uvs
 
     def embedding_to_vertex_normals(self, fs: Tensor, keep_scale: bool = False) -> Tensor:
@@ -606,6 +602,44 @@ class Manifold(Module):
             batch_dims * num_halfedges list of halfedge lengths
         """
         return norm(es, dim=-1)
+
+    def laplacian_to_definite_laplacian(self, L: sparse_coo_tensor, idx: int = 0) -> sparse_coo_tensor:
+        """Removes specified row and column of Laplacian matrix, eliminating the zero eigenvalue
+
+        Args:
+            L (sparse_coo_tensor): num_vertices * num_vertices spase Laplacian matrix
+            idx (int): index of row and column to be removed
+
+        Returns:
+            (num_vertices - 1) * (num_vertices - 1) block of sparse Laplacian matrix
+        """
+        indices = L.indices()
+        is_free = (indices != idx).all(dim=0)
+        free_indices = indices[:, is_free]
+        free_indices -= (free_indices > idx).to(int)
+        
+        free_values = L.values()[is_free]
+        L_def = sparse_coo_tensor(free_indices, free_values, (self.num_vertices - 1, self.num_vertices - 1), is_coalesced=True)
+        return L_def
+
+    def laplacian_to_interior_laplacian(self, L: sparse_coo_tensor) -> sparse_coo_tensor:
+        """Computes block of Laplacian matrix corresponding only to interior vertices
+
+        Args:
+            L (sparse_coo_tensor): num_vertices * num_vertices sparse Laplacian matrix
+
+        Returns:
+            num_interior_vertices * num_interior_vertices block of sparse Laplacian matrix
+        """
+        indices = L.indices()
+        is_int = (indices.unsqueeze(-1) != self.boundary_vertices.reshape(1, 1, -1)).all(dim=-1).all(dim=0)
+        int_indices = indices[:, is_int]
+        int_indices = int_indices - (int_indices.unsqueeze(-1) > self.boundary_vertices.reshape(1, 1, -1)).sum(dim=-1)
+
+        int_values = L.values()[is_int]
+        num_int_vertices = self.num_vertices - len(self.boundary_vertices)
+        L_int = sparse_coo_tensor(int_indices, int_values, (num_int_vertices, num_int_vertices), is_coalesced=True)
+        return L_int
     
     def metric_to_angles(self, ls: Tensor) -> Tensor:
         """Computes angles across from each halfedge using law of cosines
