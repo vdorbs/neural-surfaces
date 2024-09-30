@@ -679,6 +679,9 @@ class Manifold(Module):
     def metric_to_flat_metric(self, ls: Tensor, num_iters: int, step_size: int = 0.5, verbose: bool = False) -> Tuple[Tensor, Tensor]:
         """Optimizes log conformal factors to flatten a discrete metric, as in Conformal Equivalence of Triangle Meshes
 
+        Note:
+            This method does not implement convex extension of energy. If log conformal factors violate triangle inequality during optimization, construction of the Laplacian will fail.
+
         Args:
             ls (Tensor): num_halfedges list of halfedge lengths
             num_iters (int): number of flattening iterations
