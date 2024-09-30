@@ -1,6 +1,6 @@
 from __future__ import annotations
 from neural_surfaces.utils import factorize
-from torch import arange, arccos, cat, diagonal, diff, eye, float64, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
+from torch import arange, arccos, cat, cumsum, diagonal, diff, exp, eye, float64, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
 from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
@@ -53,6 +53,25 @@ class Manifold(Module):
 
         self.num_edges = (self.num_halfedges + self.is_boundary_halfedge.sum()) // 2
         self.euler_char = (self.num_vertices - self.num_edges + self.num_faces).item()
+
+        boundary_halfedges = stack([self.tails_to_halfedges[self.is_boundary_halfedge], self.tips_to_halfedges[self.is_boundary_halfedge]], dim=-1)
+        boundary_vertices = set(boundary_halfedges[:, 0].tolist())
+        boundary_loops = []
+        while len(boundary_vertices) > 0:
+            boundary_loop = [boundary_vertices.pop()]
+            loop_incomplete = True
+            while loop_incomplete:
+                curr_vertex = boundary_loop[-1]
+                next_vertex = boundary_halfedges[boundary_halfedges[:, 1] == curr_vertex][0, 0].item()
+                if next_vertex == boundary_loop[0]:
+                    loop_incomplete = False
+                else:
+                    boundary_vertices.remove(next_vertex)
+                    boundary_loop.append(next_vertex)
+
+            boundary_loops.append(tensor(boundary_loop))
+
+        self.boundary_loops = boundary_loops
 
     def angles_to_laplacian(self, alphas: Tensor):
         """Computes cotan Laplacian from interior angles
@@ -358,6 +377,49 @@ class Manifold(Module):
         samples = flat_samples.reshape(batch_dims + (num_samples, 3))
         
         return face_idxs, barys, samples
+
+    def embedding_to_tutte_parametrization(self, fs: Tensor) -> Tensor:
+        """Computes parametrizations of disk topology surfaces using Tutte embedding
+
+        Note:
+            Boundary is mapped to the unit circle
+
+        Args:
+            fs (Tensor): num_vertices * 3 list of vertex positions
+
+        Returns:
+            num_vertices * 2 list of planar vertex positions
+        """
+        boundary_vertices = self.boundary_loops[0]
+        boundary_fs = fs[boundary_vertices]
+        boundary_ls = norm(diff(cat([boundary_fs, boundary_fs[..., :1, :]], dim=-2), dim=-2), dim=-1)
+        boundary_ls = boundary_ls / boundary_ls.sum(dim=-1)
+        boundary_zs = exp(2 * pi * cumsum(boundary_ls, dim=-1) * 1j)
+        boundary_zs = cat([boundary_zs[..., -1:], boundary_zs[..., :-1]], dim=-1)
+        boundary_uvs = stack([boundary_zs.real, boundary_zs.imag], dim=-1)
+
+        is_int_vertex = ones(self.num_vertices, dtype=bool)
+        is_int_vertex[boundary_vertices] = False
+        
+        L = self.embedding_to_laplacian(fs)
+        indices = L.indices()
+        is_int_index = (indices.unsqueeze(-1) != boundary_vertices.reshape(1, 1, -1)).all(dim=-1).all(dim=0)
+        int_indices = indices[:, is_int_index]
+        int_indices = int_indices - (int_indices.unsqueeze(-1) > boundary_vertices.reshape(1, 1, -1)).sum(dim=-1)
+        int_values = L.values()[is_int_index]
+        num_int_vertices = self.num_vertices - len(boundary_vertices)
+        L_int = sparse_coo_tensor(int_indices, int_values, (num_int_vertices, num_int_vertices)).coalesce()
+        L_int_solver = factorize(-L_int)
+
+        x_bc = zeros_like(fs[..., :2])
+        x_bc[..., boundary_vertices, :] = boundary_uvs
+        y = L @ x_bc
+        x_int = -L_int_solver(-(L @ x_bc)[..., is_int_vertex, :])
+
+        uvs = zeros_like(x_bc)
+        uvs[..., boundary_vertices, :] = boundary_uvs
+        uvs[..., is_int_vertex, :] = x_int
+        return uvs
 
     def embedding_to_vertex_normals(self, fs: Tensor, keep_scale: bool = False) -> Tensor:
         fs_by_face = fs[..., self.faces, :]
