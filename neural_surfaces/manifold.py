@@ -1,9 +1,11 @@
 from __future__ import annotations
-from neural_surfaces.utils import factorize
-from torch import arange, arccos, cat, cumsum, diagonal, diff, exp, eye, float64, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
+from mpmath import clsin
+from neural_surfaces.utils import factorize, sparse_solve
+from torch import arange, arccos, cat, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
 from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
+from tqdm import tqdm
 from typing import Callable, Tuple
 
 
@@ -673,6 +675,50 @@ class Manifold(Module):
         sps = (l_ijs + l_jks + l_kis) / 2
         As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
         return As
+
+    def metric_to_flat_metric(self, ls: Tensor, num_iters: int, step_size: int = 0.5, verbose: bool = False) -> Tuple[Tensor, Tensor]:
+        """Optimizes log conformal factors to flatten a discrete metric, as in Conformal Equivalence of Triangle Meshes
+
+        Args:
+            ls (Tensor): num_halfedges list of halfedge lengths
+            num_iters (int): number of flattening iterations
+            step_size (float): step size of Newton's method
+            verbose (bool): whether or not to print optimization information
+
+        Returns:
+            num_halfedges list of new halfedge lengths and num_vertices list of log conformal factors generating new lengths
+        """
+        assert len(self.boundary_loops) > 0
+        lambdas = 2 * log(ls)
+
+        iterator = range(num_iters)
+        if verbose:
+            iterator = tqdm(iterator)
+
+        us = zeros(self.num_vertices).to(ls)
+        for _ in iterator:
+            new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
+            new_ls = exp(new_lambdas / 2)
+            new_angles = self.metric_to_angles(new_ls)
+            new_angles_by_face = new_angles[self.halfedges_to_faces]
+            new_angle_sums = self.halfedges_to_tails @ new_angles_by_face[:, tensor([1, 2, 0])].flatten()[self.faces_to_halfedges]
+
+            grad = (2 * pi - new_angle_sums[self.is_interior_vertex]) / 2
+            hess = -self.angles_to_laplacian(new_angles) / 2
+            hess_int = self.laplacian_to_interior_laplacian(hess)
+
+            if verbose:
+                # new_lobachevsky_angles = tensor([float(clsin(2, 2 * angle)) / 2 for angle in new_angles.tolist()])
+                # energy = (new_angles * new_lambdas).sum() / 2 + new_lobachevsky_angles.sum() -pi * us[self.faces].sum() / 2 + pi * us[self.is_interior_vertex].sum()
+                # iterator.set_description(f'energy={energy.item()} max_int_angle_defect={grad.abs().max().item()}')
+                iterator.set_description(f'max_int_angle_defect={grad.abs().max().item()}')
+
+            d_int = sparse_solve(hess_int, grad.unsqueeze(-1))[:, 0]
+            us[self.is_interior_vertex] -= step_size * d_int
+
+        new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
+        new_ls = exp(new_lambdas / 2)
+        return new_ls, us
 
     def remove_vertex(self, idx: int = 0) -> Manifold:
         """Removes a single vertex along with all incident faces
