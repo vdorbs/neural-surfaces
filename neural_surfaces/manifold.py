@@ -64,7 +64,7 @@ class Manifold(Module):
             loop_incomplete = True
             while loop_incomplete:
                 curr_vertex = boundary_loop[-1]
-                next_vertex = boundary_halfedges[boundary_halfedges[:, 1] == curr_vertex][0, 0].item()
+                next_vertex = boundary_halfedges[boundary_halfedges[:, 0] == curr_vertex][0, 1].item()
                 if next_vertex == boundary_loop[0]:
                     loop_incomplete = False
                 else:
@@ -604,6 +604,42 @@ class Manifold(Module):
             batch_dims * num_halfedges list of halfedge lengths
         """
         return norm(es, dim=-1)
+
+    def laplacian_to_conformal_energy_operator(self, L: sparse_coo_tensor) -> sparse_coo_tensor:
+        """Computes sparse matrix characterizing conformal energy quadratic form from Spectral Conformal Parametrization
+        
+        Args:
+            L (sparse_coo_tensor): num_vertices * num_vertices sparse Laplacian matrix
+
+        Returns:
+            (2 * num_vertices) * (2 * num_vertices) real representation of conformal energy operator as a sparse matrix
+        """
+        offsets = tensor([[0, 1], [0, 1]])
+        indices = L.indices()
+        indices = 2 * indices.repeat_interleave(2, dim=-1) + offsets.repeat(1, indices.shape[-1])
+        values = L.values().repeat_interleave(2, dim=-1)
+        L_comp = sparse_coo_tensor(indices, values, (2 * self.num_vertices, 2 * self.num_vertices), is_coalesced=True)
+        
+        offsets = tensor([0, 1, 1, 0, 0, 1, 1, 0])
+        template_values = tensor([1, -1, -1, 1], dtype=values.dtype) / 4
+        all_indices = []
+        all_values = []
+        for boundary_loop in self.boundary_loops:
+            cycled_boundary_loop = cat([boundary_loop[1:], boundary_loop[:1]])
+            indices = stack([boundary_loop, cycled_boundary_loop, cycled_boundary_loop, boundary_loop], dim=-1)
+            indices = indices.reshape(-1, 2).repeat(1, 2).reshape(-1, 8) # each row has form i, j, i, j, j, i, j, i
+            indices = (2 * indices + offsets).reshape(-1, 2).T
+            values = template_values.repeat(len(boundary_loop))
+
+            all_indices.append(indices)
+            all_values.append(values)
+
+        indices = cat(all_indices, dim=-1)
+        values = cat(all_values)
+        A_comp = sparse_coo_tensor(indices, values, (2 * self.num_vertices, 2 * self.num_vertices)).coalesce()
+
+        L_conf = -L_comp / 2 - A_comp
+        return L_conf
 
     def laplacian_to_definite_laplacian(self, L: sparse_coo_tensor, idx: int = 0) -> sparse_coo_tensor:
         """Removes specified row and column of Laplacian matrix, eliminating the zero eigenvalue
