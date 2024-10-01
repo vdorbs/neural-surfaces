@@ -1,7 +1,7 @@
 from __future__ import annotations
 from mpmath import clsin
 from neural_surfaces.utils import factorize, sparse_solve
-from torch import arange, arccos, cat, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
+from torch import arange, arccos, cat, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
 from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
@@ -758,6 +758,51 @@ class Manifold(Module):
         new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
         new_ls = exp(new_lambdas / 2)
         return new_ls, us
+
+    def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-8) -> Tensor:
+        L = self.angles_to_laplacian(self.metric_to_angles(ls))
+        L_conf = self.laplacian_to_conformal_energy_operator(L)
+        I = spdiags(ones(self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape)    
+        L_conf_eps = (L_conf + eps * I).coalesce()
+        L_conf_eps_solver = factorize(L_conf_eps)
+    
+        M = (1 + 0j) * self.face_areas_to_mass_matrix(self.metric_to_face_areas(ls), use_diag_mass=use_diag_mass)
+
+        us, vs = randn(2, self.num_vertices).to(ls)
+        x = us + 1j * vs
+
+        iterator = range(num_iters)
+        if verbose:
+            iterator = tqdm(iterator)
+
+        for _ in iterator:
+            y = M @ x
+
+            # Complex to real representation
+            y_comp = stack([y.real, -y.imag, y.imag, y.real], dim=-1).reshape(2 * self.num_vertices, 2)
+            next_x_comp = L_conf_eps_solver(y_comp)
+            # Real representation to complex
+            next_x = next_x_comp[::2, 0] - 1j * next_x_comp[::2, 1]
+
+            next_x = next_x - (M @ next_x).sum() / M.sum()
+            next_x = next_x / sqrt((next_x.conj() * (M @ next_x)).sum().abs())
+            x = next_x
+
+            if verbose:
+                x_comp = stack([x.real, -x.imag, x.imag, x.real], dim=-1).reshape(2 * self.num_vertices, 2)
+                lhs_comp = L_conf_eps @ x_comp
+                lhs = lhs_comp[::2, 0] - 1j * lhs_comp[::2, 1]
+
+                eigval_comp = x_comp.T @ lhs_comp
+                eigval = eigval_comp[0, 0]
+                
+                rhs = eigval * (M @ x)
+                
+                residual = norm(lhs - rhs)
+                iterator.set_description(f'residual={residual.item()}')
+
+        uvs = stack([x.real, x.imag], dim=-1)
+        return uvs
 
     def remove_vertex(self, idx: int = 0) -> Manifold:
         """Removes a single vertex along with all incident faces
