@@ -476,3 +476,28 @@ def sphere_log(x: Tensor, y: Tensor, keep_scale: bool = True) -> Tensor:
         return logs
 
     return unit_logs  
+
+def plane_to_sphere(z: Tensor) -> Tensor:
+    """Stereographically project plane onto the unit sphere through the north pole
+    
+    Args:
+        z (Tensor): batch_dims * 2 list of planar points
+
+    Returns:
+        batch_dims * 3 list of sphere points
+    """
+    squared_norm_z = norm(z, dim=-1, keepdims=True) ** 2
+    p = torch.cat([2 * z, squared_norm_z - 1], dim=-1) / (squared_norm_z + 1)
+    return p
+
+def sphere_to_plane(p: Tensor) -> Tensor:
+    """Stereographically project unit sphere onto the plane through the north pole
+    
+    Args:
+        z (Tensor): batch_dims * 3 list of sphere points
+
+    Returns:
+        batch_dims * 2 list of planar points
+    """
+    z = p[..., :2] / (1 - p[..., -1:])
+    return z

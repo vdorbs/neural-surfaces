@@ -1,8 +1,11 @@
-from neural_surfaces.utils import factorize
-from torch import arange, arccos, cat, diagonal, diff, eye, float64, maximum, minimum, multinomial, ones, pi, rand, rand_like, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros
+from __future__ import annotations
+from mpmath import clsin
+from neural_surfaces.utils import factorize, sparse_solve
+from torch import arange, arccos, cat, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
 from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
+from tqdm import tqdm
 from typing import Callable, Tuple
 
 
@@ -50,8 +53,33 @@ class Manifold(Module):
                 else:
                     self.is_boundary_halfedge[halfedge_idx] = True
 
-        self.num_edges = (self.num_halfedges - self.is_boundary_halfedge.sum()) // 2
+        self.num_edges = (self.num_halfedges + self.is_boundary_halfedge.sum()) // 2
         self.euler_char = (self.num_vertices - self.num_edges + self.num_faces).item()
+
+        boundary_halfedges = stack([self.tails_to_halfedges[self.is_boundary_halfedge], self.tips_to_halfedges[self.is_boundary_halfedge]], dim=-1)
+        boundary_vertices = set(boundary_halfedges[:, 0].tolist())
+        boundary_loops = []
+        while len(boundary_vertices) > 0:
+            boundary_loop = [boundary_vertices.pop()]
+            loop_incomplete = True
+            while loop_incomplete:
+                curr_vertex = boundary_loop[-1]
+                next_vertex = boundary_halfedges[boundary_halfedges[:, 0] == curr_vertex][0, 1].item()
+                if next_vertex == boundary_loop[0]:
+                    loop_incomplete = False
+                else:
+                    boundary_vertices.remove(next_vertex)
+                    boundary_loop.append(next_vertex)
+
+            boundary_loops.append(tensor(boundary_loop))
+
+        self.boundary_loops = boundary_loops
+
+        is_interior_vertex = ones(self.num_vertices, dtype=bool)
+        for boundary_loop in self.boundary_loops:
+            is_interior_vertex[boundary_loop] = False
+        self.is_interior_vertex = is_interior_vertex
+        self.boundary_vertices = arange(self.num_vertices)[~self.is_interior_vertex]
 
     def angles_to_laplacian(self, alphas: Tensor):
         """Computes cotan Laplacian from interior angles
@@ -244,10 +272,8 @@ class Manifold(Module):
         h = self.halfedge_vectors_to_metric(es).mean() ** 2
         A = (M - h * diff_coeff * L).coalesce()
         A_solver = factorize(A)
-        
-        indices = L.indices()
-        is_free = (indices != 0).all(dim=0)
-        L_def = sparse_coo_tensor(indices[:, is_free] - 1, L.values()[is_free], size=(self.num_vertices - 1, self.num_vertices - 1)).coalesce()
+
+        L_def = self.laplacian_to_definite_laplacian(L)
         L_def_solver = factorize(-L_def)
 
         es_by_face = es[..., self.halfedges_to_faces, :]
@@ -357,6 +383,41 @@ class Manifold(Module):
         samples = flat_samples.reshape(batch_dims + (num_samples, 3))
         
         return face_idxs, barys, samples
+
+    def embedding_to_tutte_parametrization(self, fs: Tensor) -> Tensor:
+        """Computes parametrizations of disk topology surfaces using Tutte embedding
+
+        Note:
+            Boundary is mapped to the unit circle
+
+        Args:
+            fs (Tensor): num_vertices * 3 list of vertex positions
+
+        Returns:
+            num_vertices * 2 list of planar vertex positions
+        """
+        assert len(self.boundary_loops) == 1
+        boundary_vertices = self.boundary_loops[0]
+        boundary_fs = fs[boundary_vertices]
+        boundary_ls = norm(diff(cat([boundary_fs, boundary_fs[..., :1, :]], dim=-2), dim=-2), dim=-1)
+        boundary_ls = boundary_ls / boundary_ls.sum(dim=-1)
+        boundary_zs = exp(2 * pi * cumsum(boundary_ls, dim=-1) * 1j)
+        boundary_zs = cat([boundary_zs[..., -1:], boundary_zs[..., :-1]], dim=-1)
+        boundary_uvs = stack([boundary_zs.real, boundary_zs.imag], dim=-1)
+
+        L = self.embedding_to_laplacian(fs)
+        L_int = self.laplacian_to_interior_laplacian(L)
+        L_int_solver = factorize(-L_int)
+
+        x_bc = zeros_like(fs[..., :2])
+        x_bc[..., boundary_vertices, :] = boundary_uvs
+        y = L @ x_bc
+        x_int = -L_int_solver(-(L @ x_bc)[..., self.is_interior_vertex, :])
+
+        uvs = zeros_like(x_bc)
+        uvs[..., boundary_vertices, :] = boundary_uvs
+        uvs[..., self.is_interior_vertex, :] = x_int
+        return uvs
 
     def embedding_to_vertex_normals(self, fs: Tensor, keep_scale: bool = False) -> Tensor:
         fs_by_face = fs[..., self.faces, :]
@@ -543,6 +604,80 @@ class Manifold(Module):
             batch_dims * num_halfedges list of halfedge lengths
         """
         return norm(es, dim=-1)
+
+    def laplacian_to_conformal_energy_operator(self, L: sparse_coo_tensor) -> sparse_coo_tensor:
+        """Computes sparse matrix characterizing conformal energy quadratic form from Spectral Conformal Parametrization
+        
+        Args:
+            L (sparse_coo_tensor): num_vertices * num_vertices sparse Laplacian matrix
+
+        Returns:
+            (2 * num_vertices) * (2 * num_vertices) real representation of conformal energy operator as a sparse matrix
+        """
+        offsets = tensor([[0, 1], [0, 1]])
+        indices = L.indices()
+        indices = 2 * indices.repeat_interleave(2, dim=-1) + offsets.repeat(1, indices.shape[-1])
+        values = L.values().repeat_interleave(2, dim=-1)
+        L_comp = sparse_coo_tensor(indices, values, (2 * self.num_vertices, 2 * self.num_vertices), is_coalesced=True)
+        
+        offsets = tensor([0, 1, 1, 0, 0, 1, 1, 0])
+        template_values = tensor([1, -1, -1, 1], dtype=values.dtype) / 4
+        all_indices = []
+        all_values = []
+        for boundary_loop in self.boundary_loops:
+            cycled_boundary_loop = cat([boundary_loop[1:], boundary_loop[:1]])
+            indices = stack([boundary_loop, cycled_boundary_loop, cycled_boundary_loop, boundary_loop], dim=-1)
+            indices = indices.reshape(-1, 2).repeat(1, 2).reshape(-1, 8) # each row has form i, j, i, j, j, i, j, i
+            indices = (2 * indices + offsets).reshape(-1, 2).T
+            values = template_values.repeat(len(boundary_loop))
+
+            all_indices.append(indices)
+            all_values.append(values)
+
+        indices = cat(all_indices, dim=-1)
+        values = cat(all_values)
+        A_comp = sparse_coo_tensor(indices, values, (2 * self.num_vertices, 2 * self.num_vertices)).coalesce()
+
+        L_conf = -L_comp / 2 - A_comp
+        return L_conf
+
+    def laplacian_to_definite_laplacian(self, L: sparse_coo_tensor, idx: int = 0) -> sparse_coo_tensor:
+        """Removes specified row and column of Laplacian matrix, eliminating the zero eigenvalue
+
+        Args:
+            L (sparse_coo_tensor): num_vertices * num_vertices spase Laplacian matrix
+            idx (int): index of row and column to be removed
+
+        Returns:
+            (num_vertices - 1) * (num_vertices - 1) block of sparse Laplacian matrix
+        """
+        indices = L.indices()
+        is_free = (indices != idx).all(dim=0)
+        free_indices = indices[:, is_free]
+        free_indices -= (free_indices > idx).to(int)
+        
+        free_values = L.values()[is_free]
+        L_def = sparse_coo_tensor(free_indices, free_values, (self.num_vertices - 1, self.num_vertices - 1), is_coalesced=True)
+        return L_def
+
+    def laplacian_to_interior_laplacian(self, L: sparse_coo_tensor) -> sparse_coo_tensor:
+        """Computes block of Laplacian matrix corresponding only to interior vertices
+
+        Args:
+            L (sparse_coo_tensor): num_vertices * num_vertices sparse Laplacian matrix
+
+        Returns:
+            num_interior_vertices * num_interior_vertices block of sparse Laplacian matrix
+        """
+        indices = L.indices()
+        is_int = (indices.unsqueeze(-1) != self.boundary_vertices.reshape(1, 1, -1)).all(dim=-1).all(dim=0)
+        int_indices = indices[:, is_int]
+        int_indices = int_indices - (int_indices.unsqueeze(-1) > self.boundary_vertices.reshape(1, 1, -1)).sum(dim=-1)
+
+        int_values = L.values()[is_int]
+        num_int_vertices = self.num_vertices - len(self.boundary_vertices)
+        L_int = sparse_coo_tensor(int_indices, int_values, (num_int_vertices, num_int_vertices), is_coalesced=True)
+        return L_int
     
     def metric_to_angles(self, ls: Tensor) -> Tensor:
         """Computes angles across from each halfedge using law of cosines
@@ -576,7 +711,113 @@ class Manifold(Module):
         sps = (l_ijs + l_jks + l_kis) / 2
         As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
         return As
+
+    def metric_to_flat_metric(self, ls: Tensor, num_iters: int, step_size: int = 0.5, verbose: bool = False) -> Tuple[Tensor, Tensor]:
+        """Optimizes log conformal factors to flatten a discrete metric, as in Conformal Equivalence of Triangle Meshes
+
+        Note:
+            This method does not implement convex extension of energy. If log conformal factors violate triangle inequality during optimization, construction of the Laplacian will fail.
+
+        Args:
+            ls (Tensor): num_halfedges list of halfedge lengths
+            num_iters (int): number of flattening iterations
+            step_size (float): step size of Newton's method
+            verbose (bool): whether or not to print optimization information
+
+        Returns:
+            num_halfedges list of new halfedge lengths and num_vertices list of log conformal factors generating new lengths
+        """
+        assert len(self.boundary_loops) > 0
+        lambdas = 2 * log(ls)
+
+        iterator = range(num_iters)
+        if verbose:
+            iterator = tqdm(iterator)
+
+        us = zeros(self.num_vertices).to(ls)
+        for _ in iterator:
+            new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
+            new_ls = exp(new_lambdas / 2)
+            new_angles = self.metric_to_angles(new_ls)
+            new_angles_by_face = new_angles[self.halfedges_to_faces]
+            new_angle_sums = self.halfedges_to_tails @ new_angles_by_face[:, tensor([1, 2, 0])].flatten()[self.faces_to_halfedges]
+
+            grad = (2 * pi - new_angle_sums[self.is_interior_vertex]) / 2
+            hess = -self.angles_to_laplacian(new_angles) / 2
+            hess_int = self.laplacian_to_interior_laplacian(hess)
+
+            if verbose:
+                # new_lobachevsky_angles = tensor([float(clsin(2, 2 * angle)) / 2 for angle in new_angles.tolist()])
+                # energy = (new_angles * new_lambdas).sum() / 2 + new_lobachevsky_angles.sum() -pi * us[self.faces].sum() / 2 + pi * us[self.is_interior_vertex].sum()
+                # iterator.set_description(f'energy={energy.item()} max_int_angle_defect={grad.abs().max().item()}')
+                iterator.set_description(f'max_int_angle_defect={grad.abs().max().item()}')
+
+            d_int = sparse_solve(hess_int, grad.unsqueeze(-1))[:, 0]
+            us[self.is_interior_vertex] -= step_size * d_int
+
+        new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
+        new_ls = exp(new_lambdas / 2)
+        return new_ls, us
+
+    def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-8) -> Tensor:
+        L = self.angles_to_laplacian(self.metric_to_angles(ls))
+        L_conf = self.laplacian_to_conformal_energy_operator(L)
+        I = spdiags(ones(self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape)    
+        L_conf_eps = (L_conf + eps * I).coalesce()
+        L_conf_eps_solver = factorize(L_conf_eps)
     
+        M = (1 + 0j) * self.face_areas_to_mass_matrix(self.metric_to_face_areas(ls), use_diag_mass=use_diag_mass)
+
+        us, vs = randn(2, self.num_vertices).to(ls)
+        x = us + 1j * vs
+
+        iterator = range(num_iters)
+        if verbose:
+            iterator = tqdm(iterator)
+
+        for _ in iterator:
+            y = M @ x
+
+            # Complex to real representation
+            y_comp = stack([y.real, -y.imag, y.imag, y.real], dim=-1).reshape(2 * self.num_vertices, 2)
+            next_x_comp = L_conf_eps_solver(y_comp)
+            # Real representation to complex
+            next_x = next_x_comp[::2, 0] - 1j * next_x_comp[::2, 1]
+
+            next_x = next_x - (M @ next_x).sum() / M.sum()
+            next_x = next_x / sqrt((next_x.conj() * (M @ next_x)).sum().abs())
+            x = next_x
+
+            if verbose:
+                x_comp = stack([x.real, -x.imag, x.imag, x.real], dim=-1).reshape(2 * self.num_vertices, 2)
+                lhs_comp = L_conf_eps @ x_comp
+                lhs = lhs_comp[::2, 0] - 1j * lhs_comp[::2, 1]
+
+                eigval_comp = x_comp.T @ lhs_comp
+                eigval = eigval_comp[0, 0]
+                
+                rhs = eigval * (M @ x)
+                
+                residual = norm(lhs - rhs)
+                iterator.set_description(f'residual={residual.item()}')
+
+        uvs = stack([x.real, x.imag], dim=-1)
+        return uvs
+
+    def remove_vertex(self, idx: int = 0) -> Manifold:
+        """Removes a single vertex along with all incident faces
+        
+        Args:
+            idx (int): index of vertex to be removed
+
+        Returns:
+            Manifold with face removed
+        """
+        faces = self.faces.clone()
+        faces = faces[(faces != idx).all(dim=-1)]
+        faces -= (faces > idx).to(int)
+        return Manifold(faces)
+
     def sphere_embedding_to_locator(self, sphere_fs: Tensor) -> Callable[[Tensor], Tuple[Tensor, Tensor]]:
         """Precomputes data needed for sphere locator, which computes face indices and barycentric coordinates for a spherical partition
         

@@ -2,7 +2,7 @@ from e3nn.o3 import rand_matrix
 from neural_surfaces import Manifold
 from neural_surfaces.utils import OdedSteinMeshes
 from potpourri3d import cotan_laplacian
-from torch import float64, ones_like, pi, randn, tensor, zeros_like
+from torch import cat, float64, ones_like, pi, randn, sqrt, tensor, zeros_like
 from torch.linalg import norm
 from torch.testing import assert_close
 from trimesh.primitives import Sphere
@@ -151,6 +151,19 @@ class TestManifold(TestCase):
         R_fs = fs @ R.T
         sigmas = m.frames_to_singular_values(m.embedding_to_frames(fs), m.embedding_to_frames(R_fs))
         assert_close(sigmas, ones_like(sigmas))
+
+    def test_conformal_flattening(self):
+        fs, faces = spot
+        m = Manifold(faces).remove_vertex()
+        fs = fs[1:]
+        ls = m.embedding_to_metric(fs)
+        flat_ls, _ = m.metric_to_flat_metric(ls, 50)
+        flat_fs = m.metric_to_spectral_conformal_parametrization(flat_ls, 20)
+        flat_fs = cat([flat_fs, zeros_like(flat_fs[:, :1])], dim=-1)
+        area_ratio = m.metric_to_face_areas(flat_ls).sum() / m.embedding_to_face_areas(flat_fs).sum()
+        flat_fs *= sqrt(area_ratio)
+        layout_flat_ls = m.embedding_to_metric(flat_fs)
+        assert_close(flat_ls, layout_flat_ls)
 
 
 if __name__ == '__main__':
