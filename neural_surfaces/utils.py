@@ -7,7 +7,7 @@ from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
 import torch
-from torch import arange, arccos, chunk, clamp, cos, float64, nan, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch import arange, arccos, chunk, clamp, cos, diff, float64, nan, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
 from torch.linalg import norm
 from torchsparsegradutils import sparse_generic_solve
 from trimesh.exchange.obj import load_obj
@@ -105,10 +105,30 @@ def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], al
 
     perm = tensor([0, 1, 2]) if y_up else tensor([1, 2, 0])
 
-    all_positions = [[fs[:, perm].flatten().tolist() for fs in fs_row] for fs_row in all_fs]
-    all_indices = [[faces.flatten().tolist() for faces in faces_row] for faces_row in all_faces]
-    all_normals = [[Ns[:, perm].flatten().tolist() for Ns in Ns_row] for Ns_row in all_Ns]
-    all_uvs = [[uvs.flatten().tolist() for uvs in uvs_row] for uvs_row in all_uvs]
+    all_positions = [[fs[:, perm][faces].flatten().tolist() for fs,faces in zip(*rows)] for rows in zip(all_fs, all_faces)]
+    all_indices = [[arange(3 * len(faces)).tolist() for faces in faces_row] for faces_row in all_faces]
+    all_normals = [[Ns[:, perm][faces].flatten().tolist() for Ns, faces in zip(*rows)] for rows in zip(all_Ns, all_faces)]
+
+    all_wrapped_uvs = []
+    for rows in zip(all_uvs, all_faces):
+        wrapped_uvs_row = []
+        for uvs, faces in zip(*rows):
+            us, vs = uvs.T
+            
+            us_by_face = us[faces]
+            crosses_seam = (diff(us_by_face, dim=-1).abs() > 0.75).any(dim=-1)
+            seam_crossing_us_by_face = us_by_face[crosses_seam]
+            seam_crossing_us_by_face += (seam_crossing_us_by_face < 0.5)
+            us_by_face[crosses_seam] = seam_crossing_us_by_face
+            us_by_face /= 2
+
+            vs_by_face = vs[faces]
+            wrapped_uvs = stack([us_by_face.flatten(), vs_by_face.flatten()], dim=-1).flatten().tolist()
+            wrapped_uvs_row.append(wrapped_uvs)
+
+        all_wrapped_uvs.append(wrapped_uvs_row)
+
+    all_uvs = all_wrapped_uvs
 
     with open('renderMeshes.js') as f:
         js_str = f.read()

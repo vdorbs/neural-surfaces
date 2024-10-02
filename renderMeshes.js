@@ -34,7 +34,7 @@ function renderMeshes(all_positions, all_indices, all_normals, all_uvs, mode) {
             mat.backFaceCulling = false;
 
             if (mode == "checkerboard") {
-                mat.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/g7C6P1m.png");
+                mat.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/dIzJUrT.png");
             } else if (mode == "turbo") {
                 mat.diffuseTexture = new BABYLON.Texture("https://1.bp.blogspot.com/-T2q4LV_VaTA/XVWYfIwvOVI/AAAAAAAAEcQ/aUciAXkV_QAuuZ1y5DcbstBcDr-Umw4kgCLcBGAs/s1600/image10.png");
             } else if (mode == "none") {
