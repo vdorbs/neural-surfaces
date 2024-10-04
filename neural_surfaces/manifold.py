@@ -541,7 +541,7 @@ class Manifold(Module):
                 new_l = sqrt(c_squared)
 
             elif flip_type == 'ptolemy':
-                raise NotImplementedError
+                new_l = (ls[next_halfedge] * ls[twin_next_halfedge] + ls[next_next_halfedge] * ls[twin_next_next_halfedge]) / ls[halfedge]
 
         self.tails_to_halfedges[halfedge] = twin_opp_vertex
         self.tails_to_halfedges[twin_halfedge] = opp_vertex
@@ -813,7 +813,29 @@ class Manifold(Module):
         return new_ls, us
 
     def metric_to_local_ideal_delaunay(self, ls: Tensor) -> Tensor:
-        raise NotImplementedError
+        """Computes whether or not interior halfedges satisfy local ideal Delaunay condition from Discrete Conformal Equivalence of Polyhedral Surfaces
+
+        Note:
+            Boundary halfedges are automatically assigned True
+
+        Args:
+            ls (Tensor): batch_dims * num_halfedges list of halfedge lengths
+
+        Returns:
+            batch_dims * num_halfedges list of booleans
+        """
+        l_ijs = ls
+        
+        ls_by_face = ls[..., self.halfedges_to_faces]
+        l_jks = ls_by_face[..., tensor([1, 2, 0])].flatten(start_dim=-2)[..., self.faces_to_halfedges]
+        l_kis = ls_by_face[..., tensor([2, 0, 1])].flatten(start_dim=-2)[..., self.faces_to_halfedges]
+
+        l_ils = l_jks[..., self.halfedges_to_twins]
+        l_ljs = l_kis[..., self.halfedges_to_twins]
+
+        local_ideal_delaunay = (l_ijs ** 2) * (l_jks * l_kis + l_ils * l_ljs) < (l_ils * l_kis + l_jks * l_ljs) * (l_ils * l_jks + l_kis * l_ljs)
+        local_ideal_delaunay[self.is_boundary_halfedge] = True
+        return local_ideal_delaunay
 
     def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-8) -> Tensor:
         L = self.angles_to_laplacian(self.metric_to_angles(ls))
