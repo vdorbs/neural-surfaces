@@ -1,7 +1,7 @@
 from __future__ import annotations
 from mpmath import clsin
 from neural_surfaces.utils import factorize, sparse_solve
-from torch import arange, arccos, cat, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
+from torch import arange, arccos, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
 from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
@@ -80,6 +80,23 @@ class Manifold(Module):
             is_interior_vertex[boundary_loop] = False
         self.is_interior_vertex = is_interior_vertex
         self.boundary_vertices = arange(self.num_vertices)[~self.is_interior_vertex]
+
+    def angles_to_local_delaunay(self, alphas: Tensor) -> Tensor:
+        """Computes whether or not halfedges satisfy local Delaunay condition
+
+        Note:
+            An interior halfedge satisfies local Delaunay condition if the pair of angles opposite it and its twin sum to pi or less
+
+        Args:
+            alphas (Tensor): batch_dims * num_halfedges list of interior angles, across from each halfedge
+
+        Returns:
+            batch_dims * num_halfedges list of booleans
+        """
+        angle_sums = alphas + alphas[..., self.halfedges_to_twins]
+        local_delaunay = angle_sums <= pi
+        local_delaunay[self.is_boundary_halfedge] = True
+        return local_delaunay
 
     def angles_to_laplacian(self, alphas: Tensor):
         """Computes cotan Laplacian from interior angles
@@ -479,11 +496,19 @@ class Manifold(Module):
         vertex_As = self.halfedges_to_tails @ As_by_halfedges
         return vertex_As
     
-    def flip_halfedge(self, halfedge: int):
-        """Updates topological data to implement a non-boundary halfedge flip
+    def flip_halfedge(self, halfedge: int, ls: Optional[Tensor] = None, flip_type: str = 'euclidean') -> Optional[Tensor]:
+        """Updates topological/geometric data to implement a non-boundary halfedge flip
+
+        Note:
+            If no discrete metric is provided, only topological data is updated
 
         Args:
             halfedge (int): index of halfedge to flip
+            ls (Tensor): batch_dims * num_halfedges list of halfedge lengths
+            flip_type (str): whether halfedge lengths are updated with an intrinsic Euclidean flip ('euclidean') or an intrinsic Ptolemy flip ('ptolemy')
+
+        Returns:
+            batch_dims * num_halfedges list of new discrete metric
         """
         tail = self.tails_to_halfedges[halfedge].item()
         tip = self.tips_to_halfedges[halfedge].item()
@@ -501,6 +526,23 @@ class Manifold(Module):
         twin_next_halfedge = (self.halfedges_to_faces[twin_face][twin_selector])[0].item()
         twin_next_next_halfedge = (self.halfedges_to_faces[twin_face][tensor([1, 2, 0])][twin_selector])[0].item()
 
+        if ls is not None:
+            if flip_type == 'euclidean':
+                angle = 0
+                for a, b, c in [[next_next_halfedge, halfedge, next_halfedge], [twin_halfedge, twin_next_halfedge, twin_next_next_halfedge]]:
+                    cos_half_angle = (ls[a] ** 2 + ls[b] ** 2 - ls[c] ** 2) / (2 * ls[a] * ls[b])
+                    cos_half_angle = clamp(cos_half_angle, -1, 1)
+                    angle = angle + arccos(cos_half_angle)
+
+                a = ls[next_next_halfedge]
+                b = ls[twin_next_halfedge]
+                c_squared = a ** 2 + b ** 2 - 2 * a * b * cos(angle)
+                c_squared = clamp(c_squared, min=0)
+                new_l = sqrt(c_squared)
+
+            elif flip_type == 'ptolemy':
+                raise NotImplementedError
+
         self.tails_to_halfedges[halfedge] = twin_opp_vertex
         self.tails_to_halfedges[twin_halfedge] = opp_vertex
         self.halfedges_to_tails = sparse_coo_tensor(stack([self.tails_to_halfedges, arange(self.num_halfedges)]), ones(self.num_halfedges, dtype=self.halfedges_to_tails.dtype))
@@ -514,9 +556,20 @@ class Manifold(Module):
         self.halfedges_to_faces[face] = tensor([twin_next_halfedge, halfedge, next_next_halfedge])
         self.halfedges_to_faces[twin_face] = tensor([next_halfedge, twin_halfedge, twin_next_next_halfedge])
 
-        self.faces_to_halfedges[(3 * face):(3 * (face + 1))] = self.halfedges_to_faces[face]
-        self.faces_to_halfedges[(3 * twin_face):(3 * (twin_face + 1))] = self.halfedges_to_faces[twin_face]
-    
+        self.faces_to_halfedges[self.halfedges_to_faces[face]] = arange(3 * face, 3 * (face + 1))
+        self.faces_to_halfedges[self.halfedges_to_faces[twin_face]] = arange(3 * twin_face, 3 * (twin_face + 1))
+
+        if ls is not None:
+            ls = ls.clone()
+
+            new_ls = tensor([ls[twin_next_halfedge], new_l, ls[next_next_halfedge]])
+            new_twin_ls = tensor([ls[next_halfedge], new_l, ls[twin_next_next_halfedge]])
+
+            ls[self.halfedges_to_faces[face]] = new_ls
+            ls[self.halfedges_to_faces[twin_face]] = new_twin_ls
+
+            return ls
+            
     def frames_to_singular_values(self, base_frames: Tensor, deform_frames: Tensor) -> Tensor:
         """Computes singular values for each face through a deformation, excluding the singular value associated with normal vectors
         
@@ -683,7 +736,7 @@ class Manifold(Module):
         """Computes angles across from each halfedge using law of cosines
 
         Args:
-            ls (Tensor): batch_dims * num_halfedges * 3 list of halfedge lengths
+            ls (Tensor): batch_dims * num_halfedges list of halfedge lengths
 
         Returns:
             batch_dims * num_halfedges list of interior angles
@@ -701,7 +754,7 @@ class Manifold(Module):
         """Computes face areas using Heron's formula
 
         Args:
-            ls (Tensor): batch_dims * num_halfedges * 3 list of halfedge lengths
+            ls (Tensor): batch_dims * num_halfedges list of halfedge lengths
 
         Returns:
             batch_dims * num_faces list of face areas
@@ -758,6 +811,9 @@ class Manifold(Module):
         new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
         new_ls = exp(new_lambdas / 2)
         return new_ls, us
+
+    def metric_to_local_ideal_delaunay(self, ls: Tensor) -> Tensor:
+        raise NotImplementedError
 
     def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-8) -> Tensor:
         L = self.angles_to_laplacian(self.metric_to_angles(ls))
