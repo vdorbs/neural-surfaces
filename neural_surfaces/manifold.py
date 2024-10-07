@@ -6,7 +6,7 @@ from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
 from tqdm import tqdm
-from typing import Callable, Tuple
+from typing import Callable, List, Tuple, Union
 
 
 class Manifold(Module):
@@ -749,6 +749,25 @@ class Manifold(Module):
         alphas = arccos(minimum(maximum(cos_alphas, -t), t))
         alphas = alphas.flatten(start_dim=-2)[..., self.faces_to_halfedges]
         return alphas
+
+    def metric_to_delaunay_metric(self, ls: Tensor, flip_type: 'euclidean') -> Tensor:
+        if flip_type == 'euclidean':
+            is_local_delaunay = self.angles_to_local_delaunay(self.metric_to_angles(ls))
+        elif flip_type == 'ptolemy':
+            is_local_delaunay = self.metric_to_local_ideal_delaunay(ls)
+
+        flips = []
+        while not is_local_delaunay.all():
+            idx = arange(len(is_local_delaunay))[~is_local_delaunay][0].item()
+            flips.append(idx)
+            ls = self.flip_halfedge(idx, ls, flip_type)
+
+            if flip_type == 'euclidean':
+                is_local_delaunay = self.angles_to_local_delaunay(self.metric_to_angles(ls))
+            elif flip_type == 'ptolemy':
+                is_local_delaunay = self.metric_to_local_ideal_delaunay(ls)
+
+        return ls, flips
     
     def metric_to_face_areas(self, ls: Tensor) -> Tensor:
         """Computes face areas using Heron's formula
@@ -765,52 +784,66 @@ class Manifold(Module):
         As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
         return As
 
-    def metric_to_flat_metric(self, ls: Tensor, num_iters: int, step_size: int = 0.5, verbose: bool = False) -> Tuple[Tensor, Tensor]:
-        """Optimizes log conformal factors to flatten a discrete metric, as in Conformal Equivalence of Triangle Meshes
+    def metric_to_flat_metric(self, ls: Tensor, num_iters: int, flip_halfedges: bool = False, step_size: int = 0.5, verbose: bool = False) -> Union[Tuple[Tensor, Tensor, float], Tuple[Tensor, Tensor, float, List[int]]]:
+        """Optimizes log conformal factors to flatten a discrete metric, as in Conformal Equivalence of Triangle Meshes (CETM) or Discrete Conformal Equivalence of Polyhedral Surfaces (CEPS)
 
         Note:
-            This method does not implement convex extension of energy. If log conformal factors violate triangle inequality during optimization, construction of the Laplacian will fail.
+            If flip_halfedges is True, Ptolemy flips are performed during optimization as in CEPS
+            If flip_halfedges is False, this method does not implement convex extension of energy as in CETM. If log conformal factors violate triangle inequality during optimization, construction of the Laplacian will fail.
 
         Args:
             ls (Tensor): num_halfedges list of halfedge lengths
             num_iters (int): number of flattening iterations
+            flip_halfedges (bool): whether or not halfedges are flipped with Ptolemy flips as in CEPS
             step_size (float): step size of Newton's method
             verbose (bool): whether or not to print optimization information
 
         Returns:
-            num_halfedges list of new halfedge lengths and num_vertices list of log conformal factors generating new lengths
+            num_halfedges list of new halfedge lengths, num_vertices list of log conformal factors generating new lengths, maximum interior angle defect from 2 * pi, and optionally, list of flips performed
         """
         assert len(self.boundary_loops) > 0
-        lambdas = 2 * log(ls)
+        ls = ls.clone()
+        us = zeros(self.num_vertices).to(ls)
 
         iterator = range(num_iters)
         if verbose:
             iterator = tqdm(iterator)
 
-        us = zeros(self.num_vertices).to(ls)
-        for _ in iterator:
-            new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
-            new_ls = exp(new_lambdas / 2)
-            new_angles = self.metric_to_angles(new_ls)
-            new_angles_by_face = new_angles[self.halfedges_to_faces]
-            new_angle_sums = self.halfedges_to_tails @ new_angles_by_face[:, tensor([1, 2, 0])].flatten()[self.faces_to_halfedges]
+        if flip_halfedges:
+            flips = []
 
-            grad = (2 * pi - new_angle_sums[self.is_interior_vertex]) / 2
-            hess = -self.angles_to_laplacian(new_angles) / 2
+        for _ in iterator:
+            if flip_halfedges:
+                ls, new_flips =  self.metric_to_delaunay_metric(ls, flip_type='ptolemy')
+                flips += new_flips
+                
+            lambdas = 2 * log(ls)
+            angles = self.metric_to_angles(ls)
+            angles_by_face = angles[self.halfedges_to_faces]
+            angle_sums = self.halfedges_to_tails @ angles_by_face[:, tensor([1, 2, 0])].flatten()[self.faces_to_halfedges]
+
+            grad = (2 * pi - angle_sums[self.is_interior_vertex]) / 2
+            hess = -self.angles_to_laplacian(angles) / 2
             hess_int = self.laplacian_to_interior_laplacian(hess)
 
             if verbose:
-                # new_lobachevsky_angles = tensor([float(clsin(2, 2 * angle)) / 2 for angle in new_angles.tolist()])
-                # energy = (new_angles * new_lambdas).sum() / 2 + new_lobachevsky_angles.sum() -pi * us[self.faces].sum() / 2 + pi * us[self.is_interior_vertex].sum()
+                # lobachevsky_angles = tensor([float(clsin(2, 2 * angle)) / 2 for angle in angles.tolist()])
+                # energy = (angles * lambdas).sum() / 2 + lobachevsky_angles.sum()# -pi * us[self.faces].sum() / 2 + pi * us[self.is_interior_vertex].sum()
                 # iterator.set_description(f'energy={energy.item()} max_int_angle_defect={grad.abs().max().item()}')
                 iterator.set_description(f'max_int_angle_defect={grad.abs().max().item()}')
 
             d_int = sparse_solve(hess_int, grad.unsqueeze(-1))[:, 0]
-            us[self.is_interior_vertex] -= step_size * d_int
+            diff_us = zeros_like(us)
+            diff_us[self.is_interior_vertex] = -step_size * d_int
+            lambdas = lambdas + diff_us[self.tips_to_halfedges] + diff_us[self.tails_to_halfedges]
+            ls = exp(lambdas / 2)
 
-        new_lambdas = lambdas + us[self.tips_to_halfedges] + us[self.tails_to_halfedges]
-        new_ls = exp(new_lambdas / 2)
-        return new_ls, us
+            us = us - diff_us
+
+        if flip_halfedges:
+            return ls, us, grad.abs().max().item(), flips
+
+        return ls, us, grad.abs().max().item()
 
     def metric_to_local_ideal_delaunay(self, ls: Tensor) -> Tensor:
         """Computes whether or not interior halfedges satisfy local ideal Delaunay condition from Discrete Conformal Equivalence of Polyhedral Surfaces
@@ -840,7 +873,7 @@ class Manifold(Module):
     def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-8) -> Tensor:
         L = self.angles_to_laplacian(self.metric_to_angles(ls))
         L_conf = self.laplacian_to_conformal_energy_operator(L)
-        I = spdiags(ones(self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape)    
+        I = spdiags(ones(2 * self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape)    
         L_conf_eps = (L_conf + eps * I).coalesce()
         L_conf_eps_solver = factorize(L_conf_eps)
     
