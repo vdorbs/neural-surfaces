@@ -2,6 +2,7 @@ from cholespy import CholeskySolverD, MatrixType
 from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
 from os import system
+from potpourri3d import face_areas, read_mesh
 from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
 from scipy.sparse import coo_matrix
@@ -394,7 +395,7 @@ def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
     solver = factorize(A)
     return solver(B)
 
-def ceps_parametrize(ceps_path, filename, output_filename) -> Tuple[Tensor, Tensor, Tensor]:
+def ceps_parametrize(ceps_path, filename, output_filename, use_original_triangulation: bool = False) -> Tuple[Tensor, Tensor, Tensor]:
     """Runs spherical_uniformize from Discrete Conformal Equivalence of Polyhedral Surfaces (CEPS)
 
     Note:
@@ -404,6 +405,7 @@ def ceps_parametrize(ceps_path, filename, output_filename) -> Tuple[Tensor, Tens
         ceps_path (str): path to CEPS directory
         filename (str): path to input .obj file
         output_filename (str): path for CEPS output
+        use_original_triangulation (bool): whether or not to return data only from vertices that match input mesh
 
     Returns:
         num_vertices * 3 list of sphere vertex positions, num_vertices * 3 list of mesh vertex positions, and num_faces * 3 list of vertices per face
@@ -418,11 +420,11 @@ def ceps_parametrize(ceps_path, filename, output_filename) -> Tuple[Tensor, Tens
     for line in lines:
 
         if line[:2] == 'v ':
-            v = tensor(list(map(float, line.split(' ')[1:])))
+            v = tensor(list(map(float, line.split(' ')[1:])), dtype=float64)
             fs.append(v)
 
         elif line[:2] == 'vt':
-            v = tensor(list(map(float, line.split(' ')[1:])))
+            v = tensor(list(map(float, line.split(' ')[1:])), dtype=float64)
             v = v[:3] / norm(v[:3])
             sphere_fs.append(v)
 
@@ -436,7 +438,25 @@ def ceps_parametrize(ceps_path, filename, output_filename) -> Tuple[Tensor, Tens
                 faces.append(tensor([i, j, l]))
                 faces.append(tensor([k, l, j]))
 
-    return stack(sphere_fs), stack(fs), stack(faces) - 1
+    ceps_sphere_fs = stack(sphere_fs)
+    ceps_fs = stack(fs)
+    ceps_faces = stack(faces) - 1
+
+    if use_original_triangulation:
+        ceps_As = tensor(face_areas(ceps_fs, ceps_faces))
+        ceps_com = (ceps_As.unsqueeze(-1) * ceps_fs[ceps_faces].mean(dim=-2) / ceps_As.sum()).sum(dim=-2)
+
+        fs, faces = map(tensor, read_mesh(filename))
+        As = tensor(face_areas(fs, faces))
+        com = (As.unsqueeze(-1) * fs[faces].mean(dim=-2) / As.sum()).sum(dim=-2)
+    
+        ceps_fs += com - ceps_com
+        idxs = norm(fs.unsqueeze(1) - ceps_fs.unsqueeze(0), dim=-1).min(dim=-1).indices
+        sphere_fs = ceps_sphere_fs[idxs]
+
+        return sphere_fs, fs, faces
+
+    return ceps_sphere_fs, ceps_fs, ceps_faces
 
 def sphere_exp(x: Tensor, v: Tensor) -> Tensor:
     """Computes sphere exponential
