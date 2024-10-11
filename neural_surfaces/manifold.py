@@ -750,7 +750,7 @@ class Manifold(Module):
         alphas = alphas.flatten(start_dim=-2)[..., self.faces_to_halfedges]
         return alphas
 
-    def metric_to_delaunay_metric(self, ls: Tensor, flip_type: 'euclidean') -> Tensor:
+    def metric_to_delaunay_metric(self, ls: Tensor, flip_type: str = 'euclidean') -> Tensor:
         if flip_type == 'euclidean':
             is_local_delaunay = self.angles_to_local_delaunay(self.metric_to_angles(ls))
         elif flip_type == 'ptolemy':
