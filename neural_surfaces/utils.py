@@ -8,8 +8,8 @@ from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
 import torch
-from torch import arange, arccos, chunk, clamp, cos, diff, float64, nan, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
-from torch.linalg import norm
+from torch import arange, arccos, chunk, clamp, cos, diag, diff, float64, linspace, nan, ones, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch.linalg import norm, solve
 from torchsparsegradutils import sparse_generic_solve
 from trimesh.exchange.obj import load_obj
 from typing import Callable, Dict, List, Tuple
@@ -521,3 +521,52 @@ def sphere_to_plane(p: Tensor) -> Tensor:
     """
     z = p[..., :2] / (1 - p[..., -1:])
     return z
+
+def bezier_c1(points, tangents, N):
+    num_segments = len(points) - 1
+    ts = linspace(0, num_segments, N, dtype=float)
+    segments = (ts // 1).to(int)
+    segments[0] = 0
+    segments[-1] = num_segments - 1
+    ts = ts % 1
+    ts[0] = 0.
+    ts[-1] = 1.
+    ts = ts.unsqueeze(-1)
+
+    next_control_points = points[:-1] + tangents[:-1] / 3
+    prev_control_points = points[1:] - tangents[1:] / 3
+    control_points = stack([points[:-1], next_control_points, prev_control_points, points[1:]])
+    a, b, c, d = control_points[:, segments, :]
+
+    out = ((1 - ts) ** 3) * a + 3 * ((1 - ts) ** 2) * ts * b + 3 * (1 - ts) * (ts ** 2) * c + (ts ** 3) * d
+    return out
+
+def bezier_c2(points, init_tangent, final_tangent, N):
+    num_points = len(points)
+    d = diag(4 * ones(num_points - 2, dtype=float) / 3)
+    sup_d = diag(ones(num_points - 3, dtype=float) / 3, diagonal=1)
+    A = sup_d + d + sup_d.T
+
+    b = points[2:] - points[:-2]
+    b[0] = b[0] - init_tangent / 3
+    b[-1] = b[-1] - final_tangent / 3
+
+    tangents = solve(A, b)
+    tangents = torch.cat([init_tangent.unsqueeze(0), tangents, final_tangent.unsqueeze(0)])
+    
+    return bezier_c1(points, tangents, N), tangents
+
+def bezier_c2_periodic(points, N):
+    num_points = len(points) - 1
+    d = diag(4 * ones(num_points, dtype=float) / 3)
+    sup_d = diag(ones(num_points - 1, dtype=float) / 3, diagonal=1)
+    A = sup_d + d + sup_d.T
+    A[0, -1] = 1 / 3
+    A[-1, 0] = 1 / 3
+
+    b = points[1:] - torch.cat([points[-2:], points[1:-2]])
+
+    tangents = solve(A, b)
+    tangents = torch.cat([tangents, tangents[:1]])
+    
+    return bezier_c1(points, tangents, N), tangents
