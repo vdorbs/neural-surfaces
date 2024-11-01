@@ -395,7 +395,7 @@ def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
     solver = factorize(A)
     return solver(B)
 
-def ceps_parametrize(ceps_path, filename, output_filename, use_original_triangulation: bool = False) -> Tuple[Tensor, Tensor, Tensor]:
+def ceps_parametrize(ceps_path, filename, output_filename, use_original_triangulation: bool = False, timeout: int = 300) -> Tuple[Tensor, Tensor, Tensor]:
     """Runs spherical_uniformize from Discrete Conformal Equivalence of Polyhedral Surfaces (CEPS)
 
     Note:
@@ -410,7 +410,7 @@ def ceps_parametrize(ceps_path, filename, output_filename, use_original_triangul
     Returns:
         num_vertices * 3 list of sphere vertex positions, num_vertices * 3 list of mesh vertex positions, and num_faces * 3 list of vertices per face
     """
-    system(f'{ceps_path}/build/bin/spherical_uniformize {filename} --outputMeshFilename {output_filename}')
+    system(f'timeout {timeout} {ceps_path}/build/bin/spherical_uniformize {filename} --outputMeshFilename {output_filename}')
     with open(output_filename) as f:
         lines = f.read().split('\n')
 
