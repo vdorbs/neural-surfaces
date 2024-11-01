@@ -1,8 +1,8 @@
 from __future__ import annotations
 from mpmath import clsin
-from neural_surfaces.utils import factorize, sparse_solve
-from torch import arange, arccos, arcsin, atan2, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
-from torch.linalg import det, cross, inv, norm, svd
+from neural_surfaces.utils import factorize, plane_to_sphere, sparse_solve
+from torch import arange, arccos, arcsin, atan2, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, float64, inf, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
+from torch.linalg import det, cross, inv, norm, solve, svd
 from torch.nn import Module
 from torch.sparse import spdiags
 from tqdm import tqdm
@@ -401,6 +401,21 @@ class Manifold(Module):
         
         return face_idxs, barys, samples
 
+    def embedding_to_sphere_embedding(self, fs: Tensor, flatten_iters: int, layout_iters: int, center_iters: int, verbose: bool = False, vertex_to_remove: int = 0, flatten_step_size: float = 0.5, use_diag_mass: bool = False, layout_eps: float = 1e-8, center_tol: float =1e-12):
+        As = self.embedding_to_face_areas(fs)
+        disk = self.remove_vertex(vertex_to_remove)
+        kept_fs = cat([fs[:vertex_to_remove], fs[(vertex_to_remove + 1):]])
+        ls = disk.embedding_to_metric(kept_fs)
+        flat_ls, _, _ = disk.metric_to_flat_metric(ls, flatten_iters, False, flatten_step_size, verbose)
+        uvs = disk.metric_to_spectral_conformal_parametrization(flat_ls, layout_iters, use_diag_mass, verbose, layout_eps)
+        sphere_fs = plane_to_sphere(uvs)
+        sphere_fs = cat([tensor([[0, 0, 1]], dtype=float), sphere_fs])
+        sphere_fs = -sphere_fs
+        sphere_fs = self.sphere_embedding_and_face_areas_to_centered_sphere_embedding(sphere_fs, As, center_iters, center_tol, verbose)
+        R = self.embeddings_to_rotation(sphere_fs, fs)
+        sphere_fs = sphere_fs @ R.T
+        return sphere_fs
+
     def embedding_to_tutte_parametrization(self, fs: Tensor) -> Tensor:
         """Computes parametrizations of disk topology surfaces using Tutte embedding
 
@@ -784,7 +799,7 @@ class Manifold(Module):
         As = sqrt(sps * (sps - l_ijs) * (sps - l_jks) * (sps - l_kis))
         return As
 
-    def metric_to_flat_metric(self, ls: Tensor, num_iters: int, flip_halfedges: bool = False, step_size: int = 0.5, verbose: bool = False) -> Union[Tuple[Tensor, Tensor, float], Tuple[Tensor, Tensor, float, List[int]]]:
+    def metric_to_flat_metric(self, ls: Tensor, num_iters: int, flip_halfedges: bool = False, step_size: float = 0.5, verbose: bool = False) -> Union[Tuple[Tensor, Tensor, float], Tuple[Tensor, Tensor, float, List[int]]]:
         """Optimizes log conformal factors to flatten a discrete metric, as in Conformal Equivalence of Triangle Meshes (CETM) or Discrete Conformal Equivalence of Polyhedral Surfaces (CEPS)
 
         Note:
@@ -947,7 +962,54 @@ class Manifold(Module):
             vs = (arcsin(sphere_fs[:, 2]) + pi / 2) / pi
         uvs = stack([us, vs], dim=-1)
 
-        return fs.cpu(), self.faces.cpu(), Ns.cpu(), uvs.cpu(), True, None, y_up 
+        return fs.cpu(), self.faces.cpu(), Ns.cpu(), uvs.cpu(), True, None, y_up
+
+    def sphere_embedding_and_face_areas_to_centered_sphere_embedding(self, sphere_fs: Tensor, As: Tensor, num_iters: int, tol: float = 1e-12, verbose: bool = False) -> Tensor:
+        batch_dims = sphere_fs.shape[:-2]
+        I = eye(3).to(sphere_fs).reshape(tuple(1 for _ in batch_dims) + (3, 3))
+        ps = (As / As.sum()).unsqueeze(-1)
+        
+        iterator = range(num_iters)
+        if verbose:
+            iterator = tqdm(iterator)
+
+        for _ in iterator:
+            centroids = sphere_fs[self.faces].mean(dim=-2)
+            centroids = centroids / norm(centroids, dim=-1, keepdims=True)
+            com = (ps * centroids).sum(dim=-2)
+            com_norm = norm(com, dim=-1)
+            if (com_norm < tol).all():
+                break
+
+            jac = 2 * (ps.unsqueeze(-1) * (I - centroids.unsqueeze(-1) * centroids.unsqueeze(-2))).sum(dim=-3)
+            inv_center = -solve(jac, com)
+            
+            while norm(inv_center, dim=-1).max() >= 1:
+                inv_center = inv_center / 2
+
+            new_com_norm = inf
+            num_divs = 0
+            while (new_com_norm > com_norm).any():
+                new_sphere_fs = sphere_fs + inv_center.unsqueeze(-2)
+                new_sphere_fs = new_sphere_fs / (norm(new_sphere_fs, dim=-1, keepdims=True) ** 2)
+                new_sphere_fs = (1 - norm(inv_center, dim=-1) ** 2).reshape(batch_dims + (1, 1)) * new_sphere_fs
+                new_sphere_fs = new_sphere_fs + inv_center.unsqueeze(-2)
+                new_centroids = new_sphere_fs[self.faces].mean(dim=-2)
+                new_centroids /= norm(new_centroids, dim=-1, keepdims=True)
+                new_com = (ps * new_centroids).sum(dim=-2)
+                new_com_norm = norm(new_com, dim=-1, keepdims=True)
+                inv_center = inv_center / 2
+
+                num_divs += 1
+
+            num_divs -= 1 
+
+            if verbose:
+                iterator.set_description(f'{num_divs} {new_com_norm.max().item()}')
+
+            sphere_fs = new_sphere_fs
+
+        return sphere_fs
 
     def sphere_embedding_to_locator(self, sphere_fs: Tensor) -> Callable[[Tensor], Tuple[Tensor, Tensor]]:
         """Precomputes data needed for sphere locator, which computes face indices and barycentric coordinates for a spherical partition
