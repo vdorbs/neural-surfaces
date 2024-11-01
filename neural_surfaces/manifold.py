@@ -401,7 +401,7 @@ class Manifold(Module):
         
         return face_idxs, barys, samples
 
-    def embedding_to_sphere_embedding(self, fs: Tensor, flatten_iters: int, layout_iters: int, center_iters: int, verbose: bool = False, vertex_to_remove: int = 0, flatten_step_size: float = 0.5, use_diag_mass: bool = False, layout_eps: float = 1e-8, center_tol: float =1e-12):
+    def embedding_to_sphere_embedding(self, fs: Tensor, flatten_iters: int, layout_iters: int, center_iters: int, verbose: bool = False, vertex_to_remove: int = 0, flatten_step_size: float = 0.5, use_diag_mass: bool = False, layout_eps: float = 1e-8, center_tol: float = 1e-12):
         As = self.embedding_to_face_areas(fs)
         disk = self.remove_vertex(vertex_to_remove)
         kept_fs = cat([fs[:vertex_to_remove], fs[(vertex_to_remove + 1):]])

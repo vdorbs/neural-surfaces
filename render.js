@@ -80,7 +80,7 @@ function renderMultiScene(objects) {
 
         const extraLight = new BABYLON.HemisphericLight("extraLight" + i, new BABYLON.Vector3(0, -1, 0), scene);
         scene.lights[0].intensity = 0.8;
-        extraLight.intensity = 0.3;
+        extraLight.intensity = 0.5;
 
         env = scene.createDefaultEnvironment({enableGroundMirror: true});
         env.setMainColor(BABYLON.Color3.White());

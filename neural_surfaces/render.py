@@ -88,7 +88,7 @@ class MultiScene:
             uvs /= tensor([[2, 1]])
             uvs = uvs.flatten().tolist()
 
-            crossing_faces = faces.max() + 1 + arange(3 * len(crossing_fs)).reshape(-1, 3)
+            crossing_faces = faces.max() + 1 + arange(len(crossing_fs)).reshape(-1, 3)
             indices = cat([faces[~crosses_seam], crossing_faces]).flatten().tolist()
 
         else:
