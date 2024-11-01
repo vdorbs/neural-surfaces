@@ -1,12 +1,12 @@
 from __future__ import annotations
 from mpmath import clsin
 from neural_surfaces.utils import factorize, sparse_solve
-from torch import arange, arccos, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
+from torch import arange, arccos, arcsin, atan2, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, float64, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
 from torch.linalg import det, cross, inv, norm, svd
 from torch.nn import Module
 from torch.sparse import spdiags
 from tqdm import tqdm
-from typing import Callable, List, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union
 
 
 class Manifold(Module):
@@ -928,6 +928,26 @@ class Manifold(Module):
         faces = faces[(faces != idx).all(dim=-1)]
         faces -= (faces > idx).to(int)
         return Manifold(faces)
+
+    def sphere_embedding_and_embedding_to_plot_data(self, sphere_fs: Tensor, fs: Tensor, y_up: bool = False) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], bool, Optional[Tensor], bool]:
+        """Prepares data needed to render a mesh textured with a checkerboard pattern
+        
+        Args:
+            sphere_fs (Tensor): num_vertices * 3 list of vertex positions on the unit sphere
+            fs (Tensor): num_vertices * 3 list of vertex positions to plot
+            y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
+        """
+        Ns = self.embedding_to_vertex_normals(fs)
+        
+        if y_up:
+            us = (atan2(sphere_fs[:, 0], sphere_fs[:, 2]) + pi) / (2 * pi)
+            vs = (arcsin(sphere_fs[:, 1]) + pi / 2) / pi
+        else:
+            us = (atan2(sphere_fs[:, 1], sphere_fs[:, 0]) + pi) / (2 * pi)
+            vs = (arcsin(sphere_fs[:, 2]) + pi / 2) / pi
+        uvs = stack([us, vs], dim=-1)
+
+        return fs.cpu(), self.faces.cpu(), Ns.cpu(), uvs.cpu(), True, None, y_up 
 
     def sphere_embedding_to_locator(self, sphere_fs: Tensor) -> Callable[[Tensor], Tuple[Tensor, Tensor]]:
         """Precomputes data needed for sphere locator, which computes face indices and barycentric coordinates for a spherical partition

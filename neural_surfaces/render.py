@@ -48,7 +48,7 @@ class MultiScene:
         </body>
         """
 
-    def add_mesh(self, row: int, col: int, fs: Tensor, faces: Tensor, Ns: Tensor, uvs: Optional[Tensor] = None, wrap_us: bool = False, cs: Optional[Tensor] = None):
+    def add_mesh(self, row: int, col: int, fs: Tensor, faces: Tensor, Ns: Tensor, uvs: Optional[Tensor] = None, wrap_us: bool = False, cs: Optional[Tensor] = None, y_up: bool = False):
         """Adds a mesh to a specified scene, with no colors, colors from a checkerboard pattern, or colors from the Turbo colormap
         
         Note:
@@ -63,8 +63,11 @@ class MultiScene:
             uvs (Optional[Tensor]): num_vertices * 2 list of UV coordinates per vertex, in range 0 to 1
             wrap_us (bool): whether or not U coordinates should wrap around a seam
             cs (Optional[Tensor]): num_vertices list of colors from Turbo colormap, in range 0 to 1
+            y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
         """
         scene_id = row * self.num_cols + col
+        if not y_up:
+            fs = fs[:, tensor([1, 2, 0])]
 
         if uvs is not None and wrap_us:
             us_by_face = uvs[:, 0][faces]
@@ -113,7 +116,7 @@ class MultiScene:
 
         self.obj_strs.append(obj_str)
 
-    def add_point_cloud(self, row: int, col: int, xs: Tensor, radii: float = 0.1, cs: Optional[Tensor] = None):
+    def add_point_cloud(self, row: int, col: int, xs: Tensor, radii: float = 0.1, cs: Optional[Tensor] = None, y_up: bool = False):
         """Adds a point cloud to a specified scene, with no colors or colors from the Turbo colormap
 
         Args:
@@ -122,8 +125,12 @@ class MultiScene:
             xs (Tensor): num_points * 3 list of point positions
             radii (float): radii of spheres at points
             cs (Optional[Tensor]): num_points list of colors from Turbo colormap, in range 0 to 1
+            y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
         """
         scene_id = row * self.num_cols + col
+        if not y_up:
+            xs = xs[:, tensor([1, 2, 0])]
+
         positions = xs.tolist()
         has_colors = 'true' if cs is not None else 'false'
         obj_str = f"""{{ type: "pointCloud", sceneId: {scene_id}, positions: {positions}, radii: {radii}, hasColors: {has_colors}"""
