@@ -21,6 +21,7 @@ parser.add_argument('--num_steps', type=int, default=100)
 parser.add_argument('--step_size', type=float, default=1e-3)
 parser.add_argument('--plot_every', type=int, default=10)
 parser.add_argument('--skip_frames', type=int, default=1)
+parser.add_argument('--threshold', type=float, default=0.001)
 args = parser.parse_args()
 
 fs, faces = map(tensor, read_mesh(args.mesh_path))
@@ -116,6 +117,9 @@ for step in pbar:
         log_dict['param'] = plot(sphere_fs)
 
     wandb.log(log_dict, step + 1)
+
+    if sym_dir_energy - next_sym_dir_energy < args.threshold:
+        break
 
 if args.output_path is not None:
     write_mesh(sphere_fs.numpy(), faces.numpy(), args.output_path)

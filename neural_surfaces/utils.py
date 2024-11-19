@@ -8,7 +8,7 @@ from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
 import torch
-from torch import arange, arccos, chunk, clamp, cos, diag, diff, float64, linspace, nan, ones, pi, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch import arange, arccos, chunk, clamp, cos, cumsum, diag, diff, float64, linspace, nan, ones, pi, searchsorted, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
 from torch.linalg import norm, solve
 from torchsparsegradutils import sparse_generic_solve
 from trimesh.exchange.obj import load_obj
@@ -522,26 +522,55 @@ def sphere_to_plane(p: Tensor) -> Tensor:
     z = p[..., :2] / (1 - p[..., -1:])
     return z
 
-def bezier_c1(points, tangents, N):
+def bezier_c1(points: Tensor, tangents: Tensor) -> Callable[[Tensor], Tensor]:
+    """Precompute data for piecewise cubic spline with once-differentiable transitions
+
+    Args:
+        points (Tensor): num_points * dim list of positions of knot points (transitions between pieces)
+        tangents (Tensor): num_points * dim list of vectors tangent to curve at knot points
+
+    Returns:
+        Function that maps the interval [0, 1] to a curve
+    """
     num_segments = len(points) - 1
-    ts = linspace(0, num_segments, N, dtype=float)
-    segments = (ts // 1).to(int)
-    segments[0] = 0
-    segments[-1] = num_segments - 1
-    ts = ts % 1
-    ts[0] = 0.
-    ts[-1] = 1.
-    ts = ts.unsqueeze(-1)
 
     next_control_points = points[:-1] + tangents[:-1] / 3
     prev_control_points = points[1:] - tangents[1:] / 3
     control_points = stack([points[:-1], next_control_points, prev_control_points, points[1:]])
-    a, b, c, d = control_points[:, segments, :]
 
-    out = ((1 - ts) ** 3) * a + 3 * ((1 - ts) ** 2) * ts * b + 3 * (1 - ts) * (ts ** 2) * c + (ts ** 3) * d
-    return out
+    starts = arange(num_segments).unsqueeze(-1)
+    ends = starts + 1
+    starts[0, 0] = -1e-12
+    ends[-1, 0] = num_segments + 1e-12
 
-def bezier_c2(points, init_tangent, final_tangent, N):
+    def f(ts: Tensor) -> Tensor:
+        unit_ts = (num_segments * ts).unsqueeze(0)
+        offset_ts = unit_ts - starts
+        is_in_range = (starts < unit_ts) * (ends >= unit_ts)
+
+        offset_ts = offset_ts.unsqueeze(-1)
+        is_in_range = is_in_range.unsqueeze(-1)
+        a, b, c, d = control_points.unsqueeze(-2)
+        out = ((1 - offset_ts) ** 3) * a + 3 * ((1 - offset_ts) ** 2) * offset_ts * b + 3 * (1 - offset_ts) * (offset_ts ** 2) * c + (offset_ts ** 3) * d
+        out = (is_in_range * out).sum(dim=0)
+        return out
+
+    return f
+
+def bezier_c2(points: Tensor, init_tangent: Tensor, final_tangent: Tensor) -> Tuple[Callable[[Tensor], Tensor], Tensor]:
+    """Precompute data for piecewise cubic spline with twice-differentiable transitions
+
+    Note:
+        Compared to piecewise cubic splines with once-differentiable transitions, this method only requires tangents at first and last knot points
+
+    Args:
+        points (Tensor): num_points * dim list of positions of knot points (transitions between pieces)
+        init_tangent (Tensor): tangent vector of size dim at first knot point
+        final_tangent (Tensor): tangent vector of size dim at last knot point
+
+    Returns:
+        Function that maps the interval [0, 1] to a curve and num_points * dim tangent vectors at each knot point
+    """
     num_points = len(points)
     d = diag(4 * ones(num_points - 2, dtype=float) / 3)
     sup_d = diag(ones(num_points - 3, dtype=float) / 3, diagonal=1)
@@ -554,9 +583,20 @@ def bezier_c2(points, init_tangent, final_tangent, N):
     tangents = solve(A, b)
     tangents = torch.cat([init_tangent.unsqueeze(0), tangents, final_tangent.unsqueeze(0)])
     
-    return bezier_c1(points, tangents, N), tangents
+    return bezier_c1(points, tangents), tangents
 
-def bezier_c2_periodic(points, N):
+def bezier_c2_periodic(points: Tensor) -> Tuple[Callable[[Tensor], Tensor], Tensor]:
+    """Precompute data for periodic piecewise cubic spline with twice-differentiable transitions
+
+    Note:
+        Compared to piecewise cubic splines with once- or twice-differentiable transitions, this method requires no tangents
+
+    Args:
+        points (Tensor): num_points * dim positions of knot points (transitions between pieces), with identical first and last knot points
+
+    Returns:
+        Function that maps the interval [0, 1] to a curve and num_points * dim tangent vectors at each knot point
+    """
     num_points = len(points) - 1
     d = diag(4 * ones(num_points, dtype=float) / 3)
     sup_d = diag(ones(num_points - 1, dtype=float) / 3, diagonal=1)
@@ -569,4 +609,40 @@ def bezier_c2_periodic(points, N):
     tangents = solve(A, b)
     tangents = torch.cat([tangents, tangents[:1]])
     
-    return bezier_c1(points, tangents, N), tangents
+    return bezier_c1(points, tangents), tangents
+
+def resample_curve(dense_ts, dense_ys, N):
+    """Samples curve at inputs to space out outputs approximately uniformly
+
+    Note:
+        num_points should be greater than N
+        The first and last entries of the new inputs match the first and last entries of dense_ts
+
+    Args:
+        dense_ts (Tensor): num_points list of inputs in ascending order
+        dense_ys (Tensor): num_points * dim list of corresponding outputs
+        N (int): number of new inputs to return
+
+    Returns:
+        list of N inputs
+    """
+    unnorm_pdf = norm(diff(dense_ys, dim=0), dim=-1) / diff(dense_ts)
+    unnorm_cdf = cumsum(unnorm_pdf, dim=0)
+    cdf = zeros_like(dense_ts)
+    cdf[1:] = unnorm_cdf / unnorm_cdf[-1]
+
+    cdf_eps = cdf.clone()
+    cdf_eps[0] = -1e-12
+    cdf_eps[-1] = 1 + 1e-12
+
+    quantiles = linspace(0, 1, N).to(dense_ts)
+    idxs = searchsorted(cdf_eps, quantiles)
+    left_cdfs = cdf[idxs - 1]
+    right_cdfs = cdf[idxs]
+    interps = (quantiles - left_cdfs) / (right_cdfs - left_cdfs)
+
+    left_ts = dense_ts[idxs - 1]
+    right_ts = dense_ts[idxs]
+    new_ts = (1 - interps) * left_ts + interps * right_ts
+    
+    return new_ts
