@@ -268,8 +268,8 @@ class Manifold(Module):
         """
         return fs[..., self.tips_to_halfedges, :] - fs[..., self.tails_to_halfedges, :]
     
-    def embedding_to_heat_method_solver(self, fs: Tensor, use_diag_mass: bool = False, diff_coeff: float = 1.) -> Callable[[Tensor, bool, Tensor], Tensor]:
-        """Precomputes data needed for heat method solver, which computes approximates distances
+    def embedding_to_heat_method_solver(self, fs: Tensor, use_diag_mass: bool = False, diff_coeff: float = 1.) -> Tuple[Callable[[Tensor, bool, Optional[Tensor]], Tensor], Callable[[List[Tensor], bool, Optional[List[Tensor]]], Tensor]]:
+        """Precomputes data needed for heat method solver, which computes approximate distances
 
         Args:
             fs (Tensor): num_vertices * 3 list of vertex positions
@@ -277,7 +277,7 @@ class Manifold(Module):
             diff_coeff (float): coefficient of diffusion, higher coefficient smooths distance more
 
         Returns:
-            Function mapping a num_source list of vertex indices to a num_sources * num_vertices list of geodesic distances 
+            Two functions mapping source indices to num_source * num_vertices lists of geodesic distances, the first for point sources and the second for path sources
         """
         es = self.embedding_to_halfedge_vectors(fs)
         Ns = self.halfedge_vectors_to_face_normals(es, keep_scale=True)
@@ -300,8 +300,8 @@ class Manifold(Module):
         if use_diag_mass:
             vertex_As = M.values()
 
-        def heat_method_solver(source_idxs: Tensor, use_vertex_sources: bool = True, barys: Tensor = None) -> Tensor:
-            """Computes geodesic distance from specified sources to all other vertices
+        def heat_method_point_solver(source_idxs: Tensor, use_vertex_sources: bool = True, barys: Optional[Tensor] = None) -> Tensor:
+            """Computes geodesic distance from specified point sources to all other vertices
             
             Args:
                 source_idxs (Tensor): list of num_sources vertex/face indices
@@ -312,12 +312,51 @@ class Manifold(Module):
                 num_sources * num_vertices list of geodesic distances
             """
             u_0s = zeros(self.num_vertices, len(source_idxs)).to(fs)
+            
             for j, source_idx in enumerate(source_idxs):
                 if use_vertex_sources:
                     u_0s[source_idx, j] = 1.
                 else:
                     u_0s[self.faces[source_idx], j] = barys[j]
 
+            return heat_method_solver(u_0s)
+
+        def heat_method_path_solver(all_source_idxs: List[Tensor], use_vertex_sources: bool = True, all_barys: Optional[List[Tensor]] = None) -> Tensor:
+            """Computes geodesic distance from specified path sources to all other vertices
+            
+            Args:
+                source_idxs (List[Tensor]): num_paths list of num_sources (per path) vertex/face indices
+                use_vertex_sources (bool): whether to use vertices or points within faces as sources
+                barys (List[Tensor]): num_paths list of num_sources (per path) * 3 barycentric coordinates of sources if not using vertex sources
+
+            Returns:
+                num_paths * num_vertices list of geodesic distances
+            """
+            all_u_0s = zeros(self.num_vertices, len(all_source_idxs)).to(fs)
+
+            for j, source_idxs in enumerate(all_source_idxs):
+                u_0s = zeros(self.num_vertices, len(source_idxs)).to(fs)
+                
+                for k, source_idx in enumerate(source_idxs):
+                    if use_vertex_sources:
+                        u_0s[source_idx, k] = 1.
+                    else:
+                        u_0s[self.faces[source_idx], k] = all_barys[j][k]
+
+                u_0 = u_0s.mean(dim=-1)
+                all_u_0s[:, j] = u_0
+
+            return heat_method_solver(all_u_0s)
+
+        def heat_method_solver(u_0s: Tensor) -> Tensor:
+            """Computes geodesic distance from initial condition to heat equation
+            
+            Args:
+                u_0s (Tensor): num_vertices * num_sources initial temperatures
+
+            Returns:
+                num_sources * num_vertices list of geodesic distances
+            """
             u_hs = A_solver(M @ u_0s)
             u_hs_by_face = u_hs[self.tails_to_halfedges][self.halfedges_to_faces]
             eiko_field = (u_hs_by_face.unsqueeze(-1) * basis_grads_by_face.unsqueeze(-2)).sum(dim=-3)
@@ -326,12 +365,13 @@ class Manifold(Module):
             div_eiko_field = -(self.halfedges_to_tails @ (rot_es_by_face.unsqueeze(0) * eiko_field.unsqueeze(-2)).sum(dim=-1)[..., tensor([1, 2, 0])].flatten(start_dim=-2)[:, self.faces_to_halfedges].T) / 2
             
             free_dists = -L_def_solver(div_eiko_field[1:])
-            dists = cat([zeros(1, len(source_idxs)).to(free_dists), free_dists])
+            dists = cat([zeros(1, u_0s.shape[-1]).to(free_dists), free_dists])
             dists = dists - dists.min(dim=0, keepdims=True).values
+            dists = dists.T
 
             return dists
 
-        return heat_method_solver
+        return heat_method_point_solver, heat_method_path_solver
     
     def embedding_to_laplacian(self, fs: Tensor) -> sparse_coo_tensor:
         """Computes cotan Laplacian from vertex positions
@@ -407,14 +447,19 @@ class Manifold(Module):
         kept_fs = cat([fs[:vertex_to_remove], fs[(vertex_to_remove + 1):]])
         ls = disk.embedding_to_metric(kept_fs)
         flat_ls, _, _ = disk.metric_to_flat_metric(ls, flatten_iters, False, flatten_step_size, verbose)
-        uvs = disk.metric_to_spectral_conformal_parametrization(flat_ls, layout_iters, use_diag_mass, verbose, layout_eps)
-        sphere_fs = plane_to_sphere(uvs)
-        sphere_fs = cat([tensor([[0, 0, 1]], dtype=float), sphere_fs])
-        sphere_fs = -sphere_fs
-        sphere_fs = self.sphere_embedding_and_face_areas_to_centered_sphere_embedding(sphere_fs, As, center_iters, center_tol, verbose)
-        R = self.embeddings_to_rotation(sphere_fs, fs)
-        sphere_fs = sphere_fs @ R.T
-        return sphere_fs
+
+        if flat_ls.isnan().any():
+            raise RuntimeError('Flattening failed')
+            
+        else:
+            uvs = disk.metric_to_spectral_conformal_parametrization(flat_ls, layout_iters, use_diag_mass, verbose, layout_eps)
+            sphere_fs = plane_to_sphere(uvs)
+            sphere_fs = cat([tensor([[0, 0, 1]], dtype=float), sphere_fs])
+            sphere_fs = -sphere_fs
+            sphere_fs = self.sphere_embedding_and_face_areas_to_centered_sphere_embedding(sphere_fs, As, center_iters, center_tol, verbose)
+            R = self.embeddings_to_rotation(sphere_fs, fs)
+            sphere_fs = sphere_fs @ R.T
+            return sphere_fs
 
     def embedding_to_tutte_parametrization(self, fs: Tensor) -> Tensor:
         """Computes parametrizations of disk topology surfaces using Tutte embedding
