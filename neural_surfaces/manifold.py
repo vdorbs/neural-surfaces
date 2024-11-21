@@ -1,7 +1,8 @@
 from __future__ import annotations
 from mpmath import clsin
-from neural_surfaces.utils import factorize, plane_to_sphere, sparse_solve
-from torch import arange, arccos, arcsin, atan2, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, float64, inf, log, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
+from neural_surfaces.utils import factorize, plane_to_sphere, sparse_solve, sphere_exp
+from torch import arange, arccos, arcsin, atan2, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, inf, log, log10, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
+from torch.autograd import grad
 from torch.linalg import det, cross, inv, norm, solve, svd
 from torch.nn import Module
 from torch.sparse import spdiags
@@ -12,7 +13,7 @@ from typing import Callable, List, Optional, Tuple, Union
 class Manifold(Module):
     """Stores topological data for a manifold triangle mesh. Computes objects for geometry processing when geometric data (vertex positions, edge lengths, etc.) are provided."""
     
-    def __init__(self, faces: Tensor, dtype=float64):
+    def __init__(self, faces: Tensor, dtype=float):
         """
         Args:
             faces (Tensor): num_faces * 3 list of vertices per face
@@ -441,7 +442,7 @@ class Manifold(Module):
         
         return face_idxs, barys, samples
 
-    def embedding_to_sphere_embedding(self, fs: Tensor, flatten_iters: int, layout_iters: int, center_iters: int, verbose: bool = False, vertex_to_remove: int = 0, flatten_step_size: float = 0.5, use_diag_mass: bool = False, layout_eps: float = 1e-8, center_tol: float = 1e-12):
+    def embedding_to_sphere_embedding(self, fs: Tensor, flatten_iters: int, layout_iters: int, center_iters: int, verbose: bool = False, vertex_to_remove: int = 0, flatten_step_size: float = 0.5, use_diag_mass: bool = False, layout_eps: float = 1e-12, center_tol: float = 1e-12):
         As = self.embedding_to_face_areas(fs)
         disk = self.remove_vertex(vertex_to_remove)
         kept_fs = cat([fs[:vertex_to_remove], fs[(vertex_to_remove + 1):]])
@@ -882,17 +883,17 @@ class Manifold(Module):
             angles_by_face = angles[self.halfedges_to_faces]
             angle_sums = self.halfedges_to_tails @ angles_by_face[:, tensor([1, 2, 0])].flatten()[self.faces_to_halfedges]
 
-            grad = (2 * pi - angle_sums[self.is_interior_vertex]) / 2
+            gradient = (2 * pi - angle_sums[self.is_interior_vertex]) / 2
             hess = -self.angles_to_laplacian(angles) / 2
             hess_int = self.laplacian_to_interior_laplacian(hess)
 
             if verbose:
                 # lobachevsky_angles = tensor([float(clsin(2, 2 * angle)) / 2 for angle in angles.tolist()])
                 # energy = (angles * lambdas).sum() / 2 + lobachevsky_angles.sum()# -pi * us[self.faces].sum() / 2 + pi * us[self.is_interior_vertex].sum()
-                # iterator.set_description(f'energy={energy.item()} max_int_angle_defect={grad.abs().max().item()}')
-                iterator.set_description(f'max_int_angle_defect={grad.abs().max().item()}')
+                # iterator.set_description(f'energy={energy.item()} max_int_angle_defect={gradient.abs().max().item()}')
+                iterator.set_description(f'max_int_angle_defect={gradient.abs().max().item()}')
 
-            d_int = sparse_solve(hess_int, grad.unsqueeze(-1))[:, 0]
+            d_int = sparse_solve(hess_int, gradient.unsqueeze(-1))[:, 0]
             diff_us = zeros_like(us)
             diff_us[self.is_interior_vertex] = -step_size * d_int
             lambdas = lambdas + diff_us[self.tips_to_halfedges] + diff_us[self.tails_to_halfedges]
@@ -901,9 +902,9 @@ class Manifold(Module):
             us = us - diff_us
 
         if flip_halfedges:
-            return ls, us, grad.abs().max().item(), flips
+            return ls, us, gradient.abs().max().item(), flips
 
-        return ls, us, grad.abs().max().item()
+        return ls, us, gradient.abs().max().item()
 
     def metric_to_local_ideal_delaunay(self, ls: Tensor) -> Tensor:
         """Computes whether or not interior halfedges satisfy local ideal Delaunay condition from Discrete Conformal Equivalence of Polyhedral Surfaces
@@ -930,10 +931,10 @@ class Manifold(Module):
         local_ideal_delaunay[self.is_boundary_halfedge] = True
         return local_ideal_delaunay
 
-    def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-8) -> Tensor:
+    def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-12) -> Tensor:
         L = self.angles_to_laplacian(self.metric_to_angles(ls))
         L_conf = self.laplacian_to_conformal_energy_operator(L)
-        I = spdiags(ones(2 * self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape)    
+        I = spdiags(ones(2 * self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape)
         L_conf_eps = (L_conf + eps * I).coalesce()
         L_conf_eps_solver = factorize(L_conf_eps)
     
@@ -988,6 +989,109 @@ class Manifold(Module):
         faces = faces[(faces != idx).all(dim=-1)]
         faces -= (faces > idx).to(int)
         return Manifold(faces)
+
+    def sphere_embedding_and_embedding_to_adapted_sphere_embedding(self, sphere_fs: Tensor, fs: Tensor, num_iters: int, init_step_size: float = 1e-3, threshold: float = 1e-3, eps: float = 1e-12, verbose: bool = False, mode: str = 'surface_to_sphere') -> Tensor:
+        """Adapts spherical parametrizations to minimize symmetric Dirichlet energy
+        
+        Note:
+            Initial parametrization must be flip-free
+            At each iteration, the current spherical mesh Laplacian is used to precondition the spherical gradients
+
+        Args:
+            sphere_fs (Tensor): num_vertices * 3 list of vertex positions on the unit sphere
+            fs (Tensor): num_vertices * 3 list of vertex positions
+            num_iters (int): maximum number of gradient descent steps
+            init_step_size (float): step size before backtracking for feasiblity and improvement
+            threshold (float): minimum improvement required to continue optimization
+            eps (float): constant shift added to Laplacian spectrum
+            verbose (bool): whether or not to print optimization information
+            mode (str): whether distortion is measured from the surface to the sphere (surface_to_sphere), the sphere to the surface (sphere_to_surface), or the average of both (symmetric)
+        """
+        fs = fs.clone()
+        fs -= self.embedding_to_com(fs)
+        fs *= sqrt(4 * pi / self.embedding_to_face_areas(fs).sum())
+        frames = self.embedding_to_frames(fs)
+        As = self.embedding_to_face_areas(fs)
+
+        I = spdiags(ones(self.num_vertices, dtype=float), tensor(0), shape=(self.num_vertices, self.num_vertices))
+
+        iterator = range(num_iters)
+        if verbose:
+            iterator = tqdm(iterator)
+
+        for _ in iterator:
+            sphere_fs_with_grad = sphere_fs.clone().requires_grad_(True)
+            norm_sphere_fs_with_grad = sphere_fs_with_grad / norm(sphere_fs_with_grad, dim=-1, keepdims=True)
+            sphere_frames = self.embedding_to_frames(sphere_fs_with_grad)
+            sigmas = self.frames_to_singular_values(frames, sphere_frames)
+            squared_sigmas = sigmas ** 2
+
+            if mode == 'surface_to_sphere':
+                coeffs = As
+            elif mode == 'sphere_to_surface':
+                coeffs = self.embedding_to_face_areas(sphere_fs)
+            elif mode == 'symmetric':
+                coeffs = (As + self.embedding_to_face_areas(sphere_fs)) / 2
+            else:
+                raise NotImplementedError
+
+            sym_dir_energy = (coeffs * (squared_sigmas + 1 / squared_sigmas).sum(dim=-1)).sum()
+            grads, = grad(sym_dir_energy, sphere_fs_with_grad)
+
+            L = self.embedding_to_laplacian(sphere_fs)
+            L_eps = (-L + eps * I).coalesce()
+            updates = sparse_solve(L_eps, grads)
+
+            curr_step_size = init_step_size
+            first_divs = 0
+            has_flips = True
+            while has_flips:
+                next_sphere_fs = sphere_exp(sphere_fs, -curr_step_size * updates)
+                next_sphere_fs /= norm(next_sphere_fs, dim=-1, keepdims=True)
+                next_sphere_Ns = self.embedding_to_face_normals(next_sphere_fs)
+                has_flips = ((next_sphere_Ns * next_sphere_fs[self.faces[:, 0]]).sum(dim=-1) < 0).any()
+
+                curr_step_size /= 2
+                first_divs += 1
+
+            curr_step_size *= 2
+            first_divs -= 1
+
+            next_sym_dir_energy = inf
+            second_divs = 0
+            while next_sym_dir_energy > sym_dir_energy:
+                next_sphere_fs = sphere_exp(sphere_fs, -curr_step_size * updates)
+                next_sphere_fs /= norm(next_sphere_fs, dim=-1, keepdims=True)
+                next_sphere_frames = self.embedding_to_frames(next_sphere_fs)
+                next_sigmas = self.frames_to_singular_values(frames, next_sphere_frames)
+                next_squared_sigmas = next_sigmas ** 2
+
+                if mode == 'surface_to_sphere':
+                    next_coeffs = As
+                elif mode == 'sphere_to_surface':
+                    next_coeffs = self.embedding_to_face_areas(next_sphere_fs)
+                elif mode == 'symmetric':
+                    next_coeffs = (As + self.embedding_to_face_areas(next_sphere_fs)) / 2
+                else:
+                    raise NotImplementedError
+
+                next_sym_dir_energy = (next_coeffs * (next_squared_sigmas + 1 / next_squared_sigmas).sum(dim=-1)).sum()
+
+                curr_step_size /= 2
+                second_divs += 1
+
+            curr_step_size *= 2
+            second_divs -= 1
+
+            if verbose:
+                iterator.set_description(f'energy={sym_dir_energy.item()} feasible_divs={first_divs} improved_divs={second_divs} log_step_size={log10(tensor(curr_step_size))}')
+
+            sphere_fs = next_sphere_fs
+
+            if sym_dir_energy - next_sym_dir_energy < threshold:
+                break
+
+        return sphere_fs
 
     def sphere_embedding_and_embedding_to_plot_data(self, sphere_fs: Tensor, fs: Tensor, y_up: bool = False) -> Tuple[Tensor, Tensor, Tensor, Optional[Tensor], bool, Optional[Tensor], bool]:
         """Prepares data needed to render a mesh textured with a checkerboard pattern
