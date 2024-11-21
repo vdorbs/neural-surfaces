@@ -538,7 +538,7 @@ def bezier_c1(points: Tensor, tangents: Tensor) -> Callable[[Tensor], Tensor]:
     prev_control_points = points[1:] - tangents[1:] / 3
     control_points = stack([points[:-1], next_control_points, prev_control_points, points[1:]])
 
-    starts = arange(num_segments).unsqueeze(-1)
+    starts = arange(num_segments, dtype=float).unsqueeze(-1)
     ends = starts + 1
     starts[0, 0] = -1e-12
     ends[-1, 0] = num_segments + 1e-12
