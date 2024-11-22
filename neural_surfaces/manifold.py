@@ -4,7 +4,7 @@ from neural_surfaces.utils import factorize, plane_to_sphere, sparse_solve, sphe
 from torch import arange, arccos, arcsin, atan2, cat, clamp, cos, cumsum, diagonal, diff, exp, eye, inf, log, log10, maximum, minimum, multinomial, ones, pi, rand, rand_like, randn, sort, sparse_coo_tensor, sqrt, stack, tan, Tensor, tensor, zeros, zeros_like
 from torch.autograd import grad
 from torch.linalg import det, cross, inv, norm, solve, svd
-from torch.nn import Module
+from torch.nn import Module, Parameter, ParameterList
 from torch.sparse import spdiags
 from tqdm import tqdm
 from typing import Callable, List, Optional, Tuple, Union
@@ -74,13 +74,13 @@ class Manifold(Module):
 
             boundary_loops.append(tensor(boundary_loop))
 
-        self.boundary_loops = boundary_loops
+        self.boundary_loops = ParameterList([Parameter(loop, requires_grad=False) for loop in boundary_loops])
 
         is_interior_vertex = ones(self.num_vertices, dtype=bool)
         for boundary_loop in self.boundary_loops:
             is_interior_vertex[boundary_loop] = False
         self.is_interior_vertex = is_interior_vertex
-        self.boundary_vertices = arange(self.num_vertices)[~self.is_interior_vertex]
+        self.register_buffer('boundary_vertices', arange(self.num_vertices)[~self.is_interior_vertex])
 
     def angles_to_local_delaunay(self, alphas: Tensor) -> Tensor:
         """Computes whether or not halfedges satisfy local Delaunay condition
@@ -444,7 +444,7 @@ class Manifold(Module):
 
     def embedding_to_sphere_embedding(self, fs: Tensor, flatten_iters: int, layout_iters: int, center_iters: int, verbose: bool = False, vertex_to_remove: int = 0, flatten_step_size: float = 0.5, use_diag_mass: bool = False, layout_eps: float = 1e-12, center_tol: float = 1e-12):
         As = self.embedding_to_face_areas(fs)
-        disk = self.remove_vertex(vertex_to_remove)
+        disk = self.remove_vertex(vertex_to_remove).to(fs)
         kept_fs = cat([fs[:vertex_to_remove], fs[(vertex_to_remove + 1):]])
         ls = disk.embedding_to_metric(kept_fs)
         flat_ls, _, _ = disk.metric_to_flat_metric(ls, flatten_iters, False, flatten_step_size, verbose)
@@ -455,7 +455,7 @@ class Manifold(Module):
         else:
             uvs = disk.metric_to_spectral_conformal_parametrization(flat_ls, layout_iters, use_diag_mass, verbose, layout_eps)
             sphere_fs = plane_to_sphere(uvs)
-            sphere_fs = cat([tensor([[0, 0, 1]], dtype=float), sphere_fs])
+            sphere_fs = cat([tensor([[0, 0, 1]], dtype=float, device=sphere_fs.device), sphere_fs])
             sphere_fs = -sphere_fs
             sphere_fs = self.sphere_embedding_and_face_areas_to_centered_sphere_embedding(sphere_fs, As, center_iters, center_tol, verbose)
             R = self.embeddings_to_rotation(sphere_fs, fs)
@@ -535,7 +535,7 @@ class Manifold(Module):
             indices = stack([indices, indices])
             M = sparse_coo_tensor(indices, vertex_As, size=(self.num_vertices, self.num_vertices), is_coalesced=True)
         else:
-            template_values = ((eye(3, dtype=As.dtype) + ones(3, 3, dtype=As.dtype)) / 12).flatten()
+            template_values = ((eye(3, dtype=As.dtype, device=As.device) + ones(3, 3, dtype=As.dtype, device=As.device)) / 12).flatten()
             batch_dims = As.shape[:-1]
             values = (As.unsqueeze(-1) * template_values.reshape(tuple(1 for _ in batch_dims) + (1, 9))).flatten(start_dim=-2)
             row_idxs = self.faces.repeat_interleave(3, dim=-1).flatten()
@@ -728,14 +728,14 @@ class Manifold(Module):
         Returns:
             (2 * num_vertices) * (2 * num_vertices) real representation of conformal energy operator as a sparse matrix
         """
-        offsets = tensor([[0, 1], [0, 1]])
+        offsets = tensor([[0, 1], [0, 1]], device=L.device)
         indices = L.indices()
         indices = 2 * indices.repeat_interleave(2, dim=-1) + offsets.repeat(1, indices.shape[-1])
         values = L.values().repeat_interleave(2, dim=-1)
         L_comp = sparse_coo_tensor(indices, values, (2 * self.num_vertices, 2 * self.num_vertices), is_coalesced=True)
         
-        offsets = tensor([0, 1, 1, 0, 0, 1, 1, 0])
-        template_values = tensor([1, -1, -1, 1], dtype=values.dtype) / 4
+        offsets = tensor([0, 1, 1, 0, 0, 1, 1, 0], device=L.device)
+        template_values = tensor([1, -1, -1, 1], dtype=values.dtype, device=L.device) / 4
         all_indices = []
         all_values = []
         for boundary_loop in self.boundary_loops:
@@ -934,7 +934,7 @@ class Manifold(Module):
     def metric_to_spectral_conformal_parametrization(self, ls: Tensor, num_iters: int, use_diag_mass: bool = False, verbose: bool = False, eps: float = 1e-12) -> Tensor:
         L = self.angles_to_laplacian(self.metric_to_angles(ls))
         L_conf = self.laplacian_to_conformal_energy_operator(L)
-        I = spdiags(ones(2 * self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape)
+        I = spdiags(ones(2 * self.num_vertices, dtype=ls.dtype), tensor(0), shape=L_conf.shape).to(ls.device)
         L_conf_eps = (L_conf + eps * I).coalesce()
         L_conf_eps_solver = factorize(L_conf_eps)
     
@@ -1013,7 +1013,7 @@ class Manifold(Module):
         frames = self.embedding_to_frames(fs)
         As = self.embedding_to_face_areas(fs)
 
-        I = spdiags(ones(self.num_vertices, dtype=float), tensor(0), shape=(self.num_vertices, self.num_vertices))
+        I = spdiags(ones(self.num_vertices, dtype=float), tensor(0), shape=(self.num_vertices, self.num_vertices)).to(fs.device)
 
         iterator = range(num_iters)
         if verbose:

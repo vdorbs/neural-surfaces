@@ -538,7 +538,7 @@ def bezier_c1(points: Tensor, tangents: Tensor) -> Callable[[Tensor], Tensor]:
     prev_control_points = points[1:] - tangents[1:] / 3
     control_points = stack([points[:-1], next_control_points, prev_control_points, points[1:]])
 
-    starts = arange(num_segments, dtype=float).unsqueeze(-1)
+    starts = arange(num_segments, dtype=float, device=points.device).unsqueeze(-1)
     ends = starts + 1
     starts[0, 0] = -1e-12
     ends[-1, 0] = num_segments + 1e-12
@@ -598,8 +598,8 @@ def bezier_c2_periodic(points: Tensor) -> Tuple[Callable[[Tensor], Tensor], Tens
         Function that maps the interval [0, 1] to a curve and num_points * dim tangent vectors at each knot point
     """
     num_points = len(points) - 1
-    d = diag(4 * ones(num_points, dtype=float) / 3)
-    sup_d = diag(ones(num_points - 1, dtype=float) / 3, diagonal=1)
+    d = diag(4 * ones(num_points, dtype=float, device=points.device) / 3)
+    sup_d = diag(ones(num_points - 1, dtype=float, device=points.device) / 3, diagonal=1)
     A = sup_d + d + sup_d.T
     A[0, -1] = 1 / 3
     A[-1, 0] = 1 / 3
