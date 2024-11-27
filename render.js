@@ -1,4 +1,4 @@
-function renderMultiScene(objects) {
+function renderMultiScene(objects, numFrames, frameLength) {
     const engineCanvas = document.getElementById("engineCanvas");
     const engine = new BABYLON.Engine(engineCanvas);
 
@@ -14,15 +14,23 @@ function renderMultiScene(objects) {
         };
     };
 
-    let meshId = 0;
-    let pointCloudId = 0;
+    const animationFrameCounters = [];
+    const animatedObjectsBySceneId = [];
+    for (const scene of scenes) {
+        animationFrameCounters.push(0);
+        animatedObjectsBySceneId.push([]);
+    };
+
     for (let i = 0; i < objects.length; i++) {
         const object = objects[i];
         const scene = scenes[object.sceneId];
+        if (object.isAnimated) {
+            animatedObjectsBySceneId[object.sceneId].push(i);
+        };
 
         if (object.type == "mesh") {
-            const mesh = new BABYLON.Mesh("mesh" + meshId, scene);
-            const material = new BABYLON.StandardMaterial("meshMat" + meshId, scene);
+            const mesh = new BABYLON.Mesh("mesh" + i, scene);
+            const material = new BABYLON.StandardMaterial("meshMat" + i, scene);
             const vertexData = new BABYLON.VertexData();
 
             if (object.hasUvs) {
@@ -33,7 +41,7 @@ function renderMultiScene(objects) {
                 };
                 material.diffuseTexture.uScale = -1;
             } else if (object.hasColors) {
-                vertexData.colors = object.colors;
+                vertexData.colors = object.isAnimated ? object.colors[0] : object.colors;
             } else {
                 material.diffuseColor = new BABYLON.Color3(0.678, 0.847, 0.902);
             };
@@ -41,28 +49,28 @@ function renderMultiScene(objects) {
             material.backFaceCulling = false;
             mesh.material = material;
 
-            vertexData.positions = object.positions;
-            vertexData.indices = object.indices;
+            vertexData.positions = object.isAnimated ? object.positions[0] : object.positions;
+            vertexData.indices = object.isAnimated ? object.indices[0] : object.indices;
+            vertexData.normals = object.isAnimated ? object.normals[0] : object.normals;
 
             if (object.hasUvs) {
-                vertexData.uvs = object.uvs;
+                vertexData.uvs = object.isAnimated ? object.uvs[0] : object.uvs;
             };
 
             vertexData.applyToMesh(mesh);
-            meshId += 1;
         };
 
         if (object.type == "pointCloud") {
             const diameter = 2 * object.radii;
-            for (let j = 0; j < object.positions.length; j++) {
-                const position = object.positions[j];
+            for (let j = 0; j < object.numPoints; j++) {
+                const position = object.isAnimated ? object.positions[0][j] : object.positions[j];
                 const positionVector = new BABYLON.Vector3(position[0], position[1], position[2]);
-                const sphere = BABYLON.MeshBuilder.CreateSphere("pointCloud" + pointCloudId + "Sphere" + j, {diameter: diameter}, scene);
+                const sphere = BABYLON.MeshBuilder.CreateSphere("pointCloud" + i + "Sphere" + j, {diameter: diameter}, scene);
                 sphere.position = positionVector;
 
                 if (object.hasColors) {
-                    const material = new BABYLON.StandardMaterial("pointCloud" + pointCloudId + "Sphere" + j + "Mat", scene);
-                    const color = object.colors[j];
+                    const material = new BABYLON.StandardMaterial("pointCloud" + i + "Sphere" + j + "Mat", scene);
+                    const color = object.isAnimated ? object.colors[0][j]: object.colors[j];
                     material.diffuseColor = new BABYLON.Color3(color[0], color[1], color[2]);
                     sphere.material = material;
                 };
@@ -87,6 +95,53 @@ function renderMultiScene(objects) {
 
         const view = engine.registerView(allSceneCanvases[i], scene.cameras[0]);
         views.push(view);
+
+        let animatedObjects = animatedObjectsBySceneId[i];
+        if (animatedObjects.length > 0) {
+            scene.registerBeforeRender(function() {
+                if (animationFrameCounters[i] % frameLength == 0) {
+                    const effectiveFrame = Math.floor(animationFrameCounters[i] / frameLength);
+                    for (let j = 0; j < animatedObjects.length; j++) {
+                        const objectId = animatedObjects[j];
+                        const object = objects[objectId];
+
+                        if (object.type == "mesh") {
+                            const mesh = scene.getMeshByName("mesh" + objectId);
+                            const vertexData = new BABYLON.VertexData();
+                            vertexData.positions = object.positions[effectiveFrame];
+                            vertexData.indices = object.indices[effectiveFrame];
+                            vertexData.normals = object.normals[effectiveFrame];
+
+                            if (object.hasUvs) {
+                                vertexData.uvs = object.uvs[effectiveFrame];
+                            } else if (object.hasColors) {
+                                vertexData.color = object.colors[effectiveFrame];
+                            };
+
+                            console.log(i + " mesh " + objectId)
+                            vertexData.applyToMesh(mesh);
+                        };
+
+                        if (object.type == "pointCloud") {
+                            for (let k = 0; k < object.numPoints; k++) {
+                                const sphere = scene.getMeshByName("pointCloud" + objectId + "Sphere" + k);
+                                const position = object.positions[effectiveFrame][k];
+                                const positionVector = new BABYLON.Vector3(position[0], position[1], position[2]);
+                                sphere.position = positionVector;
+
+                                if (object.hasColors) {
+                                    const color = object.colors[effectiveFrame][k];
+                                    sphere.material.diffuseColor = new BABYLON.Color3(color[0], color[1], color[2]);
+                                };
+                            };
+                        };
+
+                    };
+                };
+                animationFrameCounters[i] = (animationFrameCounters[i] + 1) % (numFrames * frameLength);
+            });
+        };
+        
     };
 
     engine.inputElement = allSceneCanvases[0];
