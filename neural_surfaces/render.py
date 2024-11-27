@@ -182,14 +182,26 @@ class MultiScene:
 
         self.obj_strs.append(obj_str)
 
-    def add_curve(self, row: int, col: int, xs: Tensor, radius: float = 0.1, color: Optional[Tensor] = None, y_up: bool = False):
+    def add_curve(self, row: int, col: int, xs: Tensor, is_looped: bool = False, radius: float = 0.1, color: Optional[Tensor] = None, y_up: bool = False):
+        """Adds a curve to a specified scene, with no colors or colors from the Turbo colormap
+
+        Args:
+            row (int): zero-indexed row
+            col (int): zero-indexed column
+            xs (Tensor): num_points * 3 list of curve vertex positions
+            is_looped (bool): whether or not curve is a loop
+            radius (float): radius of tube around curve
+            color (Optional[Tensor]): color from Turbo colormap, in range 0 to 1
+            y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
+        """
         scene_id = row * self.num_cols + col
         if not y_up:
             xs = xs[:, tensor([1, 2, 0])]
 
         positions = xs.tolist()
+        is_looped = 'true' if is_looped else 'false'
         has_colors = 'true' if color is not None else 'false'
-        obj_str = f"""{{ type: "curve", sceneId: {scene_id}, positions: {positions}, radius: {radius}, hasColors: {has_colors}"""
+        obj_str = f"""{{ type: "curve", sceneId: {scene_id}, positions: {positions}, isLooped: {is_looped}, radius: {radius}, hasColors: {has_colors}"""
         
         if color is not None:
             color = list(turbo(color)[:3])
