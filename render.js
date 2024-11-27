@@ -75,6 +75,25 @@ function renderMultiScene(objects, numFrames, frameLength) {
                     sphere.material = material;
                 };
             };
+            pointCloudId += 1;
+        };
+
+        if (object.type == "curve") {
+            for (let j = 0; j < object.positions.length - 1; j++) {
+                const start = object.positions[j];
+                const startVector = new BABYLON.Vector3(start[0], start[1], start[2]);
+                const end = object.positions[j + 1];
+                const endVector = new BABYLON.Vector3(end[0], end[1], end[2]);
+                const curve = BABYLON.MeshBuilder.CreateTube("curve" + curveId + "Tube" + j, {path: [startVector, endVector], radius: object.radius, sideOrientation: BABYLON.Mesh.DOUBLESIDE}, scene);
+
+                if (object.hasColors) {
+                    const material = new BABYLON.StandardMaterial("curve" + curveId + "Tube" + j + "Mat", scene);
+                    const color = object.colors
+                    material.diffuseColor = new BABYLON.Color3(color[0], color[1], color[2]);
+                    curve.material = material;
+                }
+            }
+            curveId += 1;
         };
     };
 

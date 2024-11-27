@@ -182,6 +182,23 @@ class MultiScene:
 
         self.obj_strs.append(obj_str)
 
+    def add_curve(self, row: int, col: int, xs: Tensor, radius: float = 0.1, color: Optional[Tensor] = None, y_up: bool = False):
+        scene_id = row * self.num_cols + col
+        if not y_up:
+            xs = xs[:, tensor([1, 2, 0])]
+
+        positions = xs.tolist()
+        has_colors = 'true' if color is not None else 'false'
+        obj_str = f"""{{ type: "curve", sceneId: {scene_id}, positions: {positions}, radius: {radius}, hasColors: {has_colors}"""
+        
+        if color is not None:
+            color = list(turbo(color)[:3])
+            obj_str = f"""{obj_str}, colors: {color}}}"""
+        else:
+            obj_str = f"""{obj_str}}}"""
+
+        self.obj_strs.append(obj_str)
+
     def make(self) -> str:
         """Generate HTML string for rendering"""
         js_str = ", ".join(self.obj_strs)
