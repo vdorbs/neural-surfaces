@@ -40,7 +40,6 @@ function renderMultiScene(objects, numFrames, frameLength) {
                 } else {
                     material.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/g7C6P1m.png");
                 };
-                // material.diffuseTexture.uScale = -1;
             } else if (object.hasColors) {
                 vertexData.colors = object.isAnimated ? object.colors[0] : object.colors;
             } else {
@@ -79,20 +78,16 @@ function renderMultiScene(objects, numFrames, frameLength) {
         };
 
         if (object.type == "curve") {
+            positions = object.isAnimated ? object.positions[0] : object.positions;
             const positionVectors = [];
-            for (const position of object.positions) {
+            for (const position of positions) {
                 positionVectors.push(new BABYLON.Vector3(position[0], position[1], position[2]));
             };
 
-            if (object.isLooped) {
-                positionVectors.push(positionVectors[0]);
-                positionVectors.push(positionVectors[1]);
-            };
-
-            const curve = BABYLON.MeshBuilder.CreateTube("curve" + i, {path: positionVectors, radius: object.radius, sideOrientation: BABYLON.Mesh.FRONTSIDE, cap: BABYLON.Mesh.CAP_ALL}, scene);
+            const curve = BABYLON.MeshBuilder.CreateTube("curve" + i, {path: positionVectors, radius: object.radius, sideOrientation: BABYLON.Mesh.FRONTSIDE, cap: BABYLON.Mesh.CAP_ALL, updatable: true}, scene);
             if (object.hasColors) {
                 const material = new BABYLON.StandardMaterial("curve" + i + "Mat", scene);
-                const color = object.colors
+                const color = object.isAnimated ? object.colors[0] : object.colors;
                 material.diffuseColor = new BABYLON.Color3(color[0], color[1], color[2]);
                 curve.material = material;
             };
@@ -139,7 +134,6 @@ function renderMultiScene(objects, numFrames, frameLength) {
                                 vertexData.color = object.colors[effectiveFrame];
                             };
 
-                            console.log(i + " mesh " + objectId)
                             vertexData.applyToMesh(mesh);
                         };
 
@@ -157,6 +151,24 @@ function renderMultiScene(objects, numFrames, frameLength) {
                             };
                         };
 
+                        if (object.type == "curve") {
+                            let tube = scene.getMeshByName("curve" + objectId);
+                            const positions = object.positions[effectiveFrame]
+                            
+                            const positionVectors = [];
+                            for (k = 0; k < positions.length; k++) {
+                                const position = positions[k];
+                                const positionVector = new BABYLON.Vector3(position[0], position[1], position[2]);
+                                positionVectors.push(positionVector);
+                            };
+
+                            BABYLON.MeshBuilder.CreateTube("curve" + objectId, {path: positionVectors, instance: tube}, scene);
+
+                            if (object.hasColors) {
+                                const color = object.colors[effectiveFrame];
+                                tube.material.diffuseColor = new BABYLON.Color3(color[0], color[1], color[2]);
+                            };
+                        };
                     };
                 };
                 animationFrameCounters[i] = (animationFrameCounters[i] + 1) % (numFrames * frameLength);
