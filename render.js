@@ -65,7 +65,7 @@ function renderMultiScene(objects, numFrames, frameLength) {
             for (let j = 0; j < object.numPoints; j++) {
                 const position = object.isAnimated ? object.positions[0][j] : object.positions[j];
                 const positionVector = new BABYLON.Vector3(position[0], position[1], position[2]);
-                const sphere = BABYLON.MeshBuilder.CreateSphere("pointCloud" + i + "Sphere" + j, {diameter: diameter}, scene);
+                const sphere = BABYLON.MeshBuilder.CreateSphere("pointCloud" + i + "Sphere" + j, {diameter: diameter, segments: 8}, scene);
                 sphere.position = positionVector;
 
                 if (object.hasColors) {

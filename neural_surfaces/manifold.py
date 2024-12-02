@@ -990,7 +990,7 @@ class Manifold(Module):
         faces -= (faces > idx).to(int)
         return Manifold(faces)
 
-    def sphere_embedding_and_embedding_to_adapted_sphere_embedding(self, sphere_fs: Tensor, fs: Tensor, num_iters: int, init_step_size: float = 1e-3, threshold: float = 1e-3, eps: float = 1e-12, verbose: bool = False, mode: str = 'surface_to_sphere') -> Tensor:
+    def sphere_embedding_and_embedding_to_adapted_sphere_embedding(self, sphere_fs: Tensor, fs: Tensor, num_iters: int, save_trajectory: bool = False, init_step_size: float = 1e-3, threshold: float = 1e-3, eps: float = 1e-12, verbose: bool = False, mode: str = 'surface_to_sphere') -> Tensor:
         """Adapts spherical parametrizations to minimize symmetric Dirichlet energy
         
         Note:
@@ -1001,6 +1001,7 @@ class Manifold(Module):
             sphere_fs (Tensor): num_vertices * 3 list of vertex positions on the unit sphere
             fs (Tensor): num_vertices * 3 list of vertex positions
             num_iters (int): maximum number of gradient descent steps
+            save_trajectory (bool): whether or not to return all intermediate sphere_embeddings
             init_step_size (float): step size before backtracking for feasiblity and improvement
             threshold (float): minimum improvement required to continue optimization
             eps (float): constant shift added to Laplacian spectrum
@@ -1018,6 +1019,9 @@ class Manifold(Module):
         iterator = range(num_iters)
         if verbose:
             iterator = tqdm(iterator)
+
+        if save_trajectory:
+            trajectory = []
 
         for _ in iterator:
             sphere_fs_with_grad = sphere_fs.clone().requires_grad_(True)
@@ -1088,8 +1092,14 @@ class Manifold(Module):
 
             sphere_fs = next_sphere_fs
 
+            if save_trajectory:
+                trajectory.append(sphere_fs)
+
             if sym_dir_energy - next_sym_dir_energy < threshold:
                 break
+
+        if save_trajectory:
+            return stack(trajectory)
 
         return sphere_fs
 
