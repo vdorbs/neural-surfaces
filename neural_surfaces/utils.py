@@ -2,7 +2,7 @@ from cholespy import CholeskySolverD, MatrixType
 from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
 from os import system
-from potpourri3d import face_areas, read_mesh
+from potpourri3d import EdgeFlipGeodesicSolver, face_areas, read_mesh
 from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
 from scipy.sparse import coo_matrix
@@ -646,3 +646,59 @@ def resample_curve(dense_ts, dense_ys, N):
     new_ts = (1 - interps) * left_ts + interps * right_ts
     
     return new_ts
+
+from torch.linalg import cross
+
+def exact_geodesic_pairwise_distances(fs, faces, face_idxs, barys):
+    curr_faces = faces.clone()
+    curr_fs = fs.clone()
+    remaining_face_idxs = face_idxs.clone()
+    remaining_barys = barys.clone()
+
+    while len(remaining_face_idxs) > 0:
+        dividing_face_idx = remaining_face_idxs[0]
+        dividing_barys = remaining_barys[0]
+        dividing_vertex = (dividing_barys.unsqueeze(-1) * curr_fs[curr_faces[dividing_face_idx]]).sum(dim=-2)
+
+        remaining_face_idxs = remaining_face_idxs[1:]
+        remaining_barys = remaining_barys[1:]
+
+        select_fs = curr_fs[curr_faces[dividing_face_idx]]
+        is_matching = remaining_face_idxs == dividing_face_idx
+        matching_fs = (remaining_barys[is_matching].unsqueeze(-1) * select_fs.unsqueeze(0)).sum(dim=-2)
+
+        curr_fs = torch.cat([curr_fs, dividing_vertex.unsqueeze(0)])
+        i, j, k = curr_faces[dividing_face_idx]
+        l = len(curr_fs) - 1
+        new_faces = tensor([[i, j, l], [j, k, l], [k, i, l]])
+        select_fs = curr_fs[new_faces]
+        select_edges = diff(torch.cat([select_fs, select_fs[:, :1, :]], dim=-2), dim=-2)
+        matching_edges = matching_fs.reshape(-1, 1, 1, 3) - select_fs.unsqueeze(0)
+        matching_subareas = norm(cross(select_edges.unsqueeze(0), matching_edges, dim=-1), dim=-1) / 2
+        areas = norm(cross(select_edges[:, 0, :], -select_edges[:, 2, :], dim=-1), dim=-1) / 2
+        matching_barys = matching_subareas / areas.unsqueeze(-1)
+        matching_barys = matching_barys[:, :, tensor([1, 2, 0])]
+        valid_bary_idxs = (matching_barys.sum(dim=-1) - 1).abs().min(dim=-1).indices
+        matching_barys = matching_barys[arange(len(matching_barys)), valid_bary_idxs]
+
+        curr_faces = torch.cat([curr_faces[:dividing_face_idx], curr_faces[(dividing_face_idx + 1):], new_faces])
+        remaining_face_idxs -= (remaining_face_idxs > dividing_face_idx).to(int)
+        remaining_face_idxs[is_matching] = len(curr_faces) - 3 + valid_bary_idxs
+        remaining_barys[is_matching] = matching_barys
+
+    solver = EdgeFlipGeodesicSolver(curr_fs.numpy(), curr_faces.numpy())
+    new_idxs = arange(len(fs), len(curr_fs))
+    pairwise_dists = []
+    for i in new_idxs:
+        dists = []
+        for j in new_idxs:
+            if i == j:
+                dists.append(tensor(0, dtype=float))
+            else:
+                path = tensor(solver.find_geodesic_path(i, j))
+                dists.append(norm(diff(path, dim=0), dim=-1).sum())
+
+        pairwise_dists.append(stack(dists))
+    
+    pairwise_dists = stack(pairwise_dists)
+    return curr_fs, curr_faces, pairwise_dists
