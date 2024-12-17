@@ -11,6 +11,7 @@ import torch
 from torch import arange, arccos, chunk, clamp, cos, cumsum, diag, diff, float64, linspace, nan, ones, pi, searchsorted, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
 from torch.linalg import norm, solve
 from torchsparsegradutils import sparse_generic_solve
+from tqdm import tqdm
 from trimesh.exchange.obj import load_obj
 from typing import Callable, Dict, List, Tuple
 from urllib.request import urlopen
@@ -649,7 +650,7 @@ def resample_curve(dense_ts, dense_ys, N):
 
 from torch.linalg import cross
 
-def exact_geodesic_pairwise_distances(fs, faces, face_idxs, barys):
+def exact_geodesic_pairwise_distances(fs, faces, face_idxs, barys, verbose: bool = False):
     curr_faces = faces.clone()
     curr_fs = fs.clone()
     remaining_face_idxs = face_idxs.clone()
@@ -688,11 +689,17 @@ def exact_geodesic_pairwise_distances(fs, faces, face_idxs, barys):
 
     solver = EdgeFlipGeodesicSolver(curr_fs.numpy(), curr_faces.numpy())
     new_idxs = arange(len(fs), len(curr_fs))
+
+    if verbose:
+        iterator = tqdm(new_idxs)
+    else:
+        iterator = new_idxs
+
     pairwise_dists = []
-    for i in new_idxs:
+    for i in iterator:
         dists = []
         for j in new_idxs:
-            if i == j:
+            if i >= j:
                 dists.append(tensor(0, dtype=float))
             else:
                 path = tensor(solver.find_geodesic_path(i, j))
@@ -701,4 +708,5 @@ def exact_geodesic_pairwise_distances(fs, faces, face_idxs, barys):
         pairwise_dists.append(stack(dists))
     
     pairwise_dists = stack(pairwise_dists)
+    pairwise_dists += pairwise_dists.T
     return curr_fs, curr_faces, pairwise_dists
