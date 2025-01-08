@@ -9,7 +9,9 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
 import torch
 from torch import arange, arccos, chunk, clamp, cos, cumsum, diag, diff, float64, linspace, nan, ones, pi, searchsorted, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch.autograd import Function
 from torch.linalg import norm, solve
+from torch.nn import Module
 from torchsparsegradutils import sparse_generic_solve
 from tqdm import tqdm
 from trimesh.exchange.obj import load_obj
@@ -331,71 +333,6 @@ def create_rectangular_mesh(num_rows: int, num_cols: int, is_2d: bool = False) -
 
     return vertices, faces
 
-def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
-    """Performs sparse Cholesky factorization to solve linear system AX = B
-
-    Note:
-        For multi-GPU systems, the matrices A and B must have device rank 0. To use a device of a different rank, set the CUDA_VISIBLE_DEVICES environment variable.
-        If m > 128, the right hand side will be split into chunks, and each chunk will be processed separately.
-    
-    Args:
-        A (sparse_coo_tensor): sparse n * n symmetric positive definite matrix
-
-    Returns:
-        Function mapping a dense n * m right-hand side matrix to a dense n * m solution matrix
-    """
-    chol_solver = CholeskySolverD(len(A), *A.indices(), A.values(), MatrixType.COO)
-
-    def backbone_solver(A: sparse_coo_tensor, B: Tensor) -> Tensor:
-        num_rhs = B.shape[-1]
-        
-        if num_rhs > 128:
-            B_batches = chunk(B, (num_rhs // 128) + 1, dim=-1)
-            X_batches = []
-            for B_batch in B_batches:
-                B_batch = B_batch.contiguous()
-                X_batch = zeros_like(B_batch)
-                chol_solver.solve(B_batch, X_batch)
-                X_batches.append(X_batch)
-            X = torch.cat(X_batches, dim=-1)
-
-        else:
-            X = zeros_like(B)
-            chol_solver.solve(B, X)
-        
-        return X
-
-    def solver(B: Tensor) -> Tensor:
-        """Solves the linear system AX = B
-
-        Args:
-            B (Tensor): dense n * m right-hand side matrix
-
-        Returns:
-            Dense n * m solution matrix
-        """
-        return sparse_generic_solve(A, B, solve=backbone_solver, transpose_solve=backbone_solver)
-
-    return solver
-
-def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
-    """Solves linear system AX = B
-
-    Note:
-        Each function call performs Cholesky factorization of A. To solve the linear system many times with different right-hand sides, use factorize
-        For multi-GPU systems, the matrices A and B must have device rank 0. To use a device of a different rank, set the CUDA_VISIBLE_DEVICES environment variable.
-        If B has more than 128 columns, the right hand side will be split into chunks, and each chunk will be processed separately.
-    
-    Args:
-        A (sparse_coo_tensor): sparse symmetric positive definite n * n matrix
-        B (Tensor): dense n * m right-hand side matrix
-
-    Returns:
-        Dense n * m solution matrix
-    """
-    solver = factorize(A)
-    return solver(B)
-
 def ceps_parametrize(ceps_path, filename, output_filename, use_original_triangulation: bool = False, timeout: int = 300) -> Tuple[Tensor, Tensor, Tensor]:
     """Runs spherical_uniformize from Discrete Conformal Equivalence of Polyhedral Surfaces (CEPS)
 
@@ -710,3 +647,78 @@ def exact_geodesic_pairwise_distances(fs, faces, face_idxs, barys, verbose: bool
     pairwise_dists = stack(pairwise_dists)
     pairwise_dists += pairwise_dists.T
     return curr_fs, curr_faces, pairwise_dists
+
+class CholeskySolver:
+    def __init__(self, A: sparse_coo_tensor):
+        self.chol_solver = CholeskySolverD(len(A), *A.indices(), A.values(), MatrixType.COO)
+
+    def solve(self, B: Tensor) -> Tensor:
+        B = B.clone()
+        num_rhs = B.shape[-1]
+
+        if num_rhs > 128:
+            B_batches = chunk(B, (num_rhs // 128) + 1, dim=-1)
+            X_batches = []
+            for B_batch in B_batches:
+                B_batch = B_batch.contiguous()
+                X_batch = zeros_like(B_batch)
+                self.chol_solver.solve(B_batch, X_batch)
+                X_batches.append(X_batch)
+            X = torch.cat(X_batches, dim=-1)
+
+        else:
+            B = B.contiguous()
+            X = zeros_like(B)
+            self.chol_solver.solve(B, X)
+
+        return X
+
+class FactorizedSolve(Function):
+    @staticmethod
+    def forward(ctx, B: Tensor, chol_solver: CholeskySolver):
+        ctx.chol_solver = chol_solver
+        X = chol_solver.solve(B)
+        return X
+
+    @staticmethod
+    def backward(ctx, grad_outputs: Tensor):
+        chol_solver = ctx.chol_solver
+        grad_inputs = chol_solver.solve(grad_outputs)
+        return grad_inputs, None
+
+def factorize(A: sparse_coo_tensor) -> Callable[[Tensor], Tensor]:
+    """Performs sparse Cholesky factorization to solve linear system AX = B
+
+    Note:
+        For multi-GPU systems, the matrices A and B must have device rank 0. To use a device of a different rank, set the CUDA_VISIBLE_DEVICES environment variable.
+        If m > 128, the right hand side will be split into chunks, and each chunk will be processed separately.
+    
+    Args:
+        A (sparse_coo_tensor): sparse n * n symmetric positive definite matrix
+
+    Returns:
+        Function mapping a dense n * m right-hand side matrix to a dense n * m solution matrix
+    """
+    chol_solver = CholeskySolver(A)
+
+    def solve(B: Tensor) -> Tensor:
+        return FactorizedSolve.apply(B, chol_solver)
+
+    return solve
+
+def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
+    """Solves linear system AX = B
+
+    Note:
+        Each function call performs Cholesky factorization of A. To solve the linear system many times with different right-hand sides, use factorize
+        For multi-GPU systems, the matrices A and B must have device rank 0. To use a device of a different rank, set the CUDA_VISIBLE_DEVICES environment variable.
+        If B has more than 128 columns, the right hand side will be split into chunks, and each chunk will be processed separately.
+    
+    Args:
+        A (sparse_coo_tensor): sparse symmetric positive definite n * n matrix
+        B (Tensor): dense n * m right-hand side matrix
+
+    Returns:
+        Dense n * m solution matrix
+    """
+    return factorize(A)(B)
