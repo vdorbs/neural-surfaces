@@ -1,4 +1,5 @@
 from cholespy import CholeskySolverD, MatrixType
+from cvxpy import Minimize, multiply, Problem, sum, sum_squares, Variable
 from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
 from os import system
@@ -547,6 +548,36 @@ def bezier_c2_periodic(points: Tensor) -> Tuple[Callable[[Tensor], Tensor], Tens
     tangents = solve(A, b)
     tangents = torch.cat([tangents, tangents[:1]])
     
+    return bezier_c1(points, tangents), tangents
+
+def bezier_c2_normal(points: Tensor, normals: Tensor) -> Tuple[Callable[[Tensor], Tensor], Tensor]:
+    """Precompute data for piecewise cubic spline with twice-differentiable transitions, with normal-constrained initial and final tangents, and intermediate tangents optimized for normality
+
+    Note:
+        Compared to piecewise cubic splines with once- or twice-differentiable transitions, this method requires no tangents
+
+    Args:
+        points (Tensor): num_points * dim list of positions of knot points (transitions between pieces)
+        normals (Tensor): num_points * dim list of vectors to which tangents at knot points should be normal
+
+    Returns:
+        Function that maps the interval [0, 1] to a curve and num_points * dim tangent vectors at each knot point
+    """
+    num_points = len(points)
+    d = diag(4 * ones(num_points, dtype=float) / 3)
+    sup_d = diag(ones(num_points - 1, dtype=float) / 3, diagonal=1)
+    A = sup_d + d + sup_d.T
+    A = A[1:-1]
+
+    b = points[2:] - points[:-2]
+
+    tangents = Variable(points.shape)
+    obj = sum_squares(sum(multiply(normals, tangents), axis=1))
+    cons = [A @ tangents == b, normals[0] @ tangents[0] == 0, normals[-1] @ tangents[-1] == 0]
+    prob = Problem(Minimize(obj), cons)
+    prob.solve()
+
+    tangents = tensor(tangents.value)
     return bezier_c1(points, tangents), tangents
 
 def resample_curve(dense_ts, dense_ys, N):
