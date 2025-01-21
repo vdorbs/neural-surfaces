@@ -1,12 +1,12 @@
 from matplotlib.cm import turbo
-from torch import arange, cat, diff, stack, Tensor, tensor
+from torch import arange, cat, diff, pi, stack, Tensor, tensor
 from typing import Optional
 
 
 class MultiScene:
     """Render with Babylon.js a grid of scenes with synchronized cameras, containing meshes and/or point clouds, with camera control attached to the upper leftmost scene"""
 
-    def __init__(self, num_rows: int, num_cols: int, num_frames: int = -1, frame_length: int = -1):
+    def __init__(self, num_rows: int, num_cols: int, alpha: float = -pi / 4, beta = 1.25, num_frames: int = -1, frame_length: int = -1):
         """
         Args:
             num_rows: number of rows
@@ -15,6 +15,8 @@ class MultiScene:
 
         self.num_rows = num_rows
         self.num_cols = num_cols
+        self.alpha = alpha
+        self.beta = beta
         self.num_frames = num_frames
         self.frame_length = frame_length
 
@@ -36,6 +38,7 @@ class MultiScene:
                 canvas.sceneCanvas {{ width: {100 // num_cols}vw; height: {100 // num_rows}vh }}
             </style>
             <script src="https://cdn.babylonjs.com/babylon.js"></script>
+            <script src="https://cdn.babylonjs.com/gui/babylon.gui.js"></script>
         </head>
         <body>
             {body_str}
@@ -211,7 +214,7 @@ class MultiScene:
             if is_animated == 'true':
                 color = turbo(color)[:, :3].tolist()
             else:
-                color = list(turbo(color)[:3])
+                color = tensor(turbo(color)[:3]).tolist()
 
             obj_str = f"""{obj_str}, colors: {color}}}"""
         else:
@@ -222,5 +225,5 @@ class MultiScene:
     def make(self) -> str:
         """Generate HTML string for rendering"""
         js_str = ", ".join(self.obj_strs)
-        js_str = f'renderMultiScene([{js_str}], {self.num_frames}, {self.frame_length})'
+        js_str = f'renderMultiScene([{js_str}], {self.alpha}, {self.beta}, {self.num_frames}, {self.frame_length})'
         return self.pre_html_str + js_str + self.post_html_str

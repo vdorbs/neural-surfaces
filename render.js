@@ -1,4 +1,4 @@
-function renderMultiScene(objects, numFrames, frameLength) {
+function renderMultiScene(objects, alpha, beta, numFrames, frameLength) {
     const engineCanvas = document.getElementById("engineCanvas");
     const engine = new BABYLON.Engine(engineCanvas);
 
@@ -99,15 +99,29 @@ function renderMultiScene(objects, numFrames, frameLength) {
         const scene = scenes[i];
         
         scene.createDefaultCameraOrLight(true, false, true);
-        scene.cameras[0].alpha = -Math.PI / 4;
-        scene.cameras[0].beta = 1.25;
+        scene.cameras[0].alpha = alpha;
+        scene.cameras[0].beta = beta;
 
         const extraLight = new BABYLON.HemisphericLight("extraLight" + i, new BABYLON.Vector3(0, -1, 0), scene);
+        const shadowLight = new BABYLON.DirectionalLight("shadowLight", new BABYLON.Vector3(-1, -1.5, 1), scene);
         scene.lights[0].intensity = 0.8;
         extraLight.intensity = 0.5;
+        shadowLight.intensity = 0.5;
 
-        env = scene.createDefaultEnvironment({enableGroundMirror: true});
-        env.setMainColor(BABYLON.Color3.White());
+        env = scene.createDefaultEnvironment();
+        env.setMainColor(new BABYLON.Color3(10, 10, 10));
+        env.ground.receiveShadows = true;
+
+        const generator = new BABYLON.ShadowGenerator(2048, shadowLight);
+        generator.usePercentageCloserFiltering = true;
+        generator._darkness = -0.75;
+
+        for (let j = 0; j < objects.length; j++) {
+            if (objects[j].sceneId == i && objects[j].type == "mesh") {
+                mesh = scene.getMeshByName("mesh" + j);
+                generator.getShadowMap().renderList.push(mesh);
+            };
+        };
 
         const view = engine.registerView(allSceneCanvases[i], scene.cameras[0]);
         views.push(view);
@@ -178,6 +192,23 @@ function renderMultiScene(objects, numFrames, frameLength) {
     };
 
     engine.inputElement = allSceneCanvases[0];
+
+    const advancedTexture = new BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI", true, scenes[0]);
+    
+    const screenshotButton = BABYLON.GUI.Button.CreateSimpleButton("button", "Screenshot");
+    screenshotButton.width = "100px";
+    screenshotButton.height = "40px";
+    screenshotButton.color = "black";
+    screenshotButton.background = "gray";
+    screenshotButton.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+    screenshotButton.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+    screenshotButton.onPointerClickObservable.add(function() {
+        for (const scene of scenes) {
+            BABYLON.Tools.CreateScreenshotUsingRenderTarget(engine, scene.cameras[0], {precision: 1}, undefined, undefined, 10);
+        };
+    });
+
+    advancedTexture.addControl(screenshotButton);
 
     engine.runRenderLoop(function() {
         for (let i = 0; i < views.length; i++) {

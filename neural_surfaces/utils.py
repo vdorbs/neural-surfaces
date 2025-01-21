@@ -4,19 +4,20 @@ from http.server import SimpleHTTPRequestHandler
 from io import BytesIO
 from os import system
 from potpourri3d import EdgeFlipGeodesicSolver, face_areas, read_mesh
+from pygeodesic.geodesic import PyGeodesicAlgorithmExact
 from socket import AF_INET, SOCK_DGRAM, socket
 from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
 import torch
-from torch import arange, arccos, chunk, clamp, cos, cumsum, diag, diff, float64, linspace, nan, ones, pi, searchsorted, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch import arange, arccos, atan2, chunk, clamp, cos, cumsum, diag, diff, float64, linspace, nan, ones, pi, searchsorted, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
 from torch.autograd import Function
-from torch.linalg import norm, solve
+from torch.linalg import cross, norm, solve
 from torch.nn import Module
 from torchsparsegradutils import sparse_generic_solve
 from tqdm import tqdm
 from trimesh.exchange.obj import load_obj
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 from urllib.request import urlopen
 
 
@@ -511,8 +512,8 @@ def bezier_c2(points: Tensor, init_tangent: Tensor, final_tangent: Tensor) -> Tu
         Function that maps the interval [0, 1] to a curve and num_points * dim tangent vectors at each knot point
     """
     num_points = len(points)
-    d = diag(4 * ones(num_points - 2, dtype=float) / 3)
-    sup_d = diag(ones(num_points - 3, dtype=float) / 3, diagonal=1)
+    d = diag(4 * ones(num_points - 2, dtype=float, device=points.device) / 3)
+    sup_d = diag(ones(num_points - 3, dtype=float, device=points.device) / 3, diagonal=1)
     A = sup_d + d + sup_d.T
 
     b = points[2:] - points[:-2]
@@ -563,6 +564,10 @@ def bezier_c2_normal(points: Tensor, normals: Tensor) -> Tuple[Callable[[Tensor]
     Returns:
         Function that maps the interval [0, 1] to a curve and num_points * dim tangent vectors at each knot point
     """
+    device = points.device
+    points = points.cpu()
+    normals = normals.cpu()
+
     num_points = len(points)
     d = diag(4 * ones(num_points, dtype=float) / 3)
     sup_d = diag(ones(num_points - 1, dtype=float) / 3, diagonal=1)
@@ -577,8 +582,8 @@ def bezier_c2_normal(points: Tensor, normals: Tensor) -> Tuple[Callable[[Tensor]
     prob = Problem(Minimize(obj), cons)
     prob.solve()
 
-    tangents = tensor(tangents.value)
-    return bezier_c1(points, tangents), tangents
+    tangents = tensor(tangents.value).to(device)
+    return bezier_c1(points.to(device), tangents), tangents
 
 def resample_curve(dense_ts, dense_ys, N):
     """Samples curve at inputs to space out outputs approximately uniformly
@@ -655,28 +660,39 @@ def exact_geodesic_pairwise_distances(fs, faces, face_idxs, barys, verbose: bool
         remaining_face_idxs[is_matching] = len(curr_faces) - 3 + valid_bary_idxs
         remaining_barys[is_matching] = matching_barys
 
-    solver = EdgeFlipGeodesicSolver(curr_fs.numpy(), curr_faces.numpy())
+    # solver = EdgeFlipGeodesicSolver(curr_fs.numpy(), curr_faces.numpy())
+    # new_idxs = arange(len(fs), len(curr_fs))
+
+    # if verbose:
+    #     iterator = tqdm(new_idxs)
+    # else:
+    #     iterator = new_idxs
+
+    # pairwise_dists = []
+    # for i in iterator:
+    #     dists = []
+    #     for j in new_idxs:
+    #         if i >= j:
+    #             dists.append(tensor(0, dtype=float))
+    #         else:
+    #             path = tensor(solver.find_geodesic_path(i, j))
+    #             dists.append(norm(diff(path, dim=0), dim=-1).sum())
+
+    #     pairwise_dists.append(stack(dists))
+    
+    # pairwise_dists = stack(pairwise_dists)
+    # pairwise_dists += pairwise_dists.T
+    
+    solver = PyGeodesicAlgorithmExact(curr_fs.numpy(), curr_faces.numpy())
     new_idxs = arange(len(fs), len(curr_fs))
 
-    if verbose:
-        iterator = tqdm(new_idxs)
-    else:
-        iterator = new_idxs
-
     pairwise_dists = []
-    for i in iterator:
-        dists = []
-        for j in new_idxs:
-            if i >= j:
-                dists.append(tensor(0, dtype=float))
-            else:
-                path = tensor(solver.find_geodesic_path(i, j))
-                dists.append(norm(diff(path, dim=0), dim=-1).sum())
+    for idx in tqdm(new_idxs):
+        dists, _ = solver.geodesicDistances(idx.unsqueeze(0).numpy(), None)
+        dists = tensor(dists)[new_idxs]
+        pairwise_dists.append(dists)
 
-        pairwise_dists.append(stack(dists))
-    
     pairwise_dists = stack(pairwise_dists)
-    pairwise_dists += pairwise_dists.T
     return curr_fs, curr_faces, pairwise_dists
 
 class CholeskySolver:
@@ -753,3 +769,35 @@ def sparse_solve(A: sparse_coo_tensor, B: Tensor) -> Tensor:
         Dense n * m solution matrix
     """
     return factorize(A)(B)
+
+def euler_bernoulli_energy(xs: Tensor, is_looped: bool = False, Ns: Optional[Tensor] = None):
+    if is_looped:
+        edges = diff(torch.cat([xs[..., -1:, :], xs, xs[..., :1, :]], dim=-2), dim=-2)
+    else:
+        edges = diff(xs, dim=-2)
+
+    prev_edges = edges[..., :-1, :]
+    next_edges = edges[..., 1:, :]
+    
+    if Ns is not None:
+        if not is_looped:
+            Ns = Ns[..., 1:-1, :]
+
+        prev_edges = prev_edges - (Ns * prev_edges).sum(dim=-1, keepdims=True) * Ns
+        next_edges = next_edges - (Ns * next_edges).sum(dim=-1, keepdims=True) * Ns
+
+    prev_unit_edges = prev_edges / norm(prev_edges, dim=-1, keepdims=True)
+    next_unit_edges = next_edges / norm(next_edges, dim=-1, keepdims=True)
+
+    cos_turning_angles = (prev_unit_edges * next_unit_edges).sum(dim=-1)
+    sin_turning_angles = norm(cross(prev_unit_edges, next_unit_edges, dim=-1), dim=-1)
+    turning_angles = atan2(sin_turning_angles, cos_turning_angles)
+
+    dual_lengths = (norm(prev_edges, dim=-1) + norm(next_edges, dim=-1)) / 2
+
+    energy = ((turning_angles ** 2) / dual_lengths).sum(dim=-1) / 2
+
+    if energy.isnan().any():
+        assert False
+
+    return energy
