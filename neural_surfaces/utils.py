@@ -10,7 +10,7 @@ from socketserver import TCPServer
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import factorized, spsolve
 import torch
-from torch import arange, arccos, atan2, chunk, clamp, cos, cumsum, diag, diff, float64, linspace, nan, ones, pi, searchsorted, sin, sinc, sparse_coo_tensor, stack, Tensor, tensor, zeros_like
+from torch import arange, arccos, atan2, chunk, clamp, cos, cumsum, diag, diff, exp, float64, linspace, nan, ones, pi, searchsorted, sin, sinc, sparse_coo_tensor, sqrt, stack, Tensor, tensor, zeros_like
 from torch.autograd import Function
 from torch.linalg import cross, norm, solve
 from torch.nn import Module
@@ -329,11 +329,66 @@ def create_rectangular_mesh(num_rows: int, num_cols: int, is_2d: bool = False) -
     faces = []
     for i in range(num_rows - 1):
         for j in range(num_cols - 1):
-            faces += [[num_rows * i + j, num_rows * i + j + 1, num_rows * i + num_cols + j]]
-            faces += [[num_rows * i + j + 1, num_rows * i + num_cols + j + 1, num_rows * i + num_cols + j]]
+            faces += [[num_cols * i + j, num_cols * i + j + 1, num_cols * (i + 1) + j]]
+            faces += [[num_cols * i + j + 1, num_cols * (i + 1) + j + 1, num_cols * (i + 1) + j]]
     faces = tensor(faces)
 
     return vertices, faces
+
+def create_toroidal_mesh(num_rows: int, num_cols: int, inner_radius: float, outer_radius: float) -> Tuple[Tensor, Tensor, Tensor]:
+    xs = arange(num_cols - 1, dtype=float64).repeat(num_rows - 1)
+    ys = arange(num_rows - 1).repeat_interleave(num_cols - 1)
+    torus_vertices = stack([xs, ys], dim=-1)
+    torus_vertices /= tensor([[num_cols - 1, num_rows - 1]], dtype=float)
+
+    thetas, phis = 2 * pi * torus_vertices.T
+    inners = inner_radius * stack([cos(thetas), sin(thetas), zeros_like(thetas)], dim=-1)
+    vertices = inners + outer_radius * stack([cos(phis) * cos(thetas), cos(phis) * sin(thetas), sin(phis)], dim=-1)
+
+    faces = []
+    for i in range(num_rows - 2):
+        for j in range(num_cols - 2):
+            faces += [[(num_cols - 1) * i + j, (num_cols - 1) * i + j + 1, (num_cols - 1) * (i + 1) + j]]
+            faces += [[(num_cols - 1) * i + j + 1, (num_cols - 1) * (i + 1) + j + 1, (num_cols - 1) * (i + 1) + j]]
+
+        j = num_cols - 2
+        faces += [[(num_cols - 1) * i + j, (num_cols - 1) * i, (num_cols - 1) * (i + 1) + j]]
+        faces += [[(num_cols - 1) * i, (num_cols - 1) * (i + 1), (num_cols - 1) * (i + 1) + j]]
+
+    i = num_rows - 2
+    for j in range(num_cols - 2):
+        faces += [[(num_cols - 1) * i + j, (num_cols - 1)* i + j + 1, j]]
+        faces += [[(num_cols - 1) * i + j + 1, j + 1, j]]
+
+    i = num_rows - 2
+    j = num_cols - 2
+    faces += [[(num_cols - 1) * i + j, (num_cols - 1) * i, j]]
+    faces += [[(num_cols - 1) * i, 0, j]]
+    faces = tensor(faces)
+
+    return torus_vertices, vertices, faces
+
+def rectangle_locator(fs: Tensor, faces: Tensor, xs: Tensor) -> Tuple[Tensor, Tensor]:
+    batch_dims = xs.shape[:-1]
+    fs_by_face = fs[faces]
+    es_by_face = diff(torch.cat([fs_by_face, fs_by_face[:, :1, :]], dim=-2), dim=-2)
+    As = (es_by_face[:, 0, 0] * (-es_by_face[:, -1, 1]) - es_by_face[:, 0, 1] * (-es_by_face[:, -1, 0])).abs()
+
+    reshaped_fs_by_face = fs_by_face.reshape(tuple(1 for _ in batch_dims) + fs_by_face.shape)
+    reshaped_es_by_face = es_by_face.reshape(reshaped_fs_by_face.shape)
+    reshaped_As = As.reshape(tuple(1 for _ in batch_dims) + As.shape)
+    reshaped_xs = xs.reshape(batch_dims + (1, 1, 2))
+    diff_xs = reshaped_xs - reshaped_fs_by_face
+
+    subareas = (reshaped_es_by_face[..., 0] * diff_xs[..., 1] - diff_xs[..., 0] * reshaped_es_by_face[..., 1]).abs()
+    barys = subareas / reshaped_As.unsqueeze(-1)
+    barys = barys[..., tensor([1, 2, 0])]
+    bary_sums = barys.sum(dim=-1)
+    is_valid = (bary_sums - 1).abs() < 1e-12
+
+    face_idxs = (arange(len(faces), device=is_valid.device) * is_valid).sum(dim=-1)
+    barys = (barys * is_valid.unsqueeze(-1)).sum(dim=-2)
+    return face_idxs, barys
 
 def ceps_parametrize(ceps_path, filename, output_filename, use_original_triangulation: bool = False, timeout: int = 300) -> Tuple[Tensor, Tensor, Tensor]:
     """Runs spherical_uniformize from Discrete Conformal Equivalence of Polyhedral Surfaces (CEPS)
@@ -801,3 +856,16 @@ def euler_bernoulli_energy(xs: Tensor, is_looped: bool = False, Ns: Optional[Ten
         assert False
 
     return energy
+
+def pairwise_dists_to_pair_correlation_function(dists: Tensor, surface_area: float, sigma: float, rs: Tensor):
+    g_rs = []
+    for r in rs:
+        K_r = exp(-((r - dists) ** 2) / (sigma ** 2)) / (sqrt(tensor(pi, dtype=dists.dtype)) * sigma)
+        K_r -= diag(diag(K_r))
+        g_r = K_r.sum() / r
+        g_rs.append(g_r)
+
+    g_rs = tensor(g_rs)
+    g_rs *= surface_area / (2 * pi * (len(dists) ** 2))
+    
+    return g_rs
