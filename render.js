@@ -36,9 +36,9 @@ function renderMultiScene(objects, alpha, beta, numFrames, frameLength) {
 
             if (object.hasUvs) {
                 if (object.wrapUs) {
-                    material.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/dIzJUrT.png");
+                    material.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/DMYF8Q7.png");
                 } else {
-                    material.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/g7C6P1m.png");
+                    material.diffuseTexture = new BABYLON.Texture("https://i.imgur.com/zXCNI7h.png");
                 };
             } else if (object.hasColors) {
                 vertexData.colors = object.isAnimated ? object.colors[0] : object.colors;
@@ -145,7 +145,7 @@ function renderMultiScene(objects, alpha, beta, numFrames, frameLength) {
                             if (object.hasUvs) {
                                 vertexData.uvs = object.uvs[effectiveFrame];
                             } else if (object.hasColors) {
-                                vertexData.color = object.colors[effectiveFrame];
+                                vertexData.colors = object.colors[effectiveFrame];
                             };
 
                             vertexData.applyToMesh(mesh);
