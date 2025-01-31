@@ -227,3 +227,51 @@ class MultiScene:
         js_str = ", ".join(self.obj_strs)
         js_str = f'renderMultiScene([{js_str}], {self.alpha}, {self.beta}, {self.num_frames}, {self.frame_length})'
         return self.pre_html_str + js_str + self.post_html_str
+
+class Scene:
+    """Render a scene with Babylon.js, containing meshes and/or point clouds"""
+    def __init__(self, alpha: float = -pi / 4, beta = 1.25, num_frames: int = -1, frame_length: int = -1):
+        self.multi_scene = MultiScene(1, 1, alpha, beta, num_frames, frame_length)
+
+    def add_mesh(self, fs: Tensor, faces: Tensor, Ns: Tensor, uvs: Optional[Tensor] = None, wrap_us: bool = False, cs: Optional[Tensor] = None, y_up: bool = False, is_animated: bool = False):
+        """Adds a mesh to a specified scene, with no colors, colors from a checkerboard pattern, or colors from the Turbo colormap
+        
+        Note:
+            If both uvs and cs are provided, cs will be ignored
+
+        Args:
+            fs (Tensor): num_vertices * 3 list of vertex positions
+            faces (Tensor): num_faces * 3 list of vertices per face
+            Ns (Tensor): num_vertices * 3 list of vertex normals
+            uvs (Optional[Tensor]): num_vertices * 2 list of UV coordinates per vertex, in range 0 to 1
+            wrap_us (bool): whether or not U coordinates should wrap around a seam
+            cs (Optional[Tensor]): num_vertices list of colors from Turbo colormap, in range 0 to 1
+            y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
+            is_animated (bool): whether or not data is dynamic, to be rendered as an animation
+        """
+        return self.multi_scene.add_mesh(0, 0, fs, faces, Ns, uvs, wrap_us, cs, y_up, is_animated)
+
+     def add_point_cloud(self, xs: Tensor, radii: float = 0.1, cs: Optional[Tensor] = None, y_up: bool = False, is_animated: bool = False):
+        """Adds a point cloud to a specified scene, with no colors or colors from the Turbo colormap
+
+        Args:
+            xs (Tensor): num_points * 3 list of point positions
+            radii (float): radii of spheres at points
+            cs (Optional[Tensor]): num_points list of colors from Turbo colormap, in range 0 to 1
+            y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
+            is_animated (bool): whether or not data is dynamic, to be rendered as an animation
+        """
+        return self.multi_scene.add_point_cloud(0, 0, xs, radii, cs, y_up, is_animated)
+
+    def add_curve(self, xs: Tensor, is_looped: bool = False, radius: float = 0.1, color: Optional[Tensor] = None, y_up: bool = False, is_animated: bool = False):
+        """Adds a curve to a specified scene, with no colors or colors from the Turbo colormap
+
+        Args:
+            xs (Tensor): num_points * 3 list of curve vertex positions
+            is_looped (bool): whether or not curve is a loop
+            radius (float): radius of tube around curve
+            color (Optional[Tensor]): color from Turbo colormap, in range 0 to 1
+            y_up (bool): whether x points right, y points up, z points forward or x points forward, y points right, z points up
+            is_animated (bool): whether or not data is dynamic, to be rendered as an animation
+        """
+        return self.multi_scene.add_curve(0, 0, xs, is_looped, radius, color, y_up, is_animated)
