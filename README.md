@@ -25,3 +25,14 @@ or from the command line, run:
 ```
 CUDA_VISIBLE_DEVICES=2 python your_script.py
 ```
+## Oded Stein Meshes
+Some of the meshes from [`odedstein-meshes`](https://github.com/odedstein/meshes) repository are available for download through the class `OdedSteinMeshes` in `neural_surfaces.utils`. As mentioned in that repository, you can cite that repository with the following `bibtex` snippet:
+```
+@article{odedstein-meshes,
+  title={odedstein-meshes: A Computer Graphics Example Mesh Repository},
+  author={Stein, Oded},
+  notes={\url{odedstein.com/meshes}},
+  year={2024}
+}
+```
+but please be sure to credit the authors of each of the assets you use individually. Please make sure you follow the requirements of the respective licenses for each object in that collection.
