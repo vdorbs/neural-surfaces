@@ -57,7 +57,7 @@ if args.log_to_wandb:
 
 for step in tqdm(range(args.num_steps)):
     M = manifold.embedding_to_mass_matrix(fs)
-    A = M - args.h * L
+    A = (M - args.h * L).coalesce()
     fs = sparse_solve(A, M @ fs)
     fs -= manifold.embedding_to_com(fs)
     fs *= sqrt(4 * pi / manifold.embedding_to_face_areas(fs).sum())
