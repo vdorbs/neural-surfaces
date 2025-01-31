@@ -275,6 +275,10 @@ def point_cloud_trajectories_and_mesh_to_html(x_trajs: Tensor, radii: float, fra
     
     return html_str
 
+def write_html(filename: str, html_str: str):
+    with open(filename, 'w') as fid:
+        fid.write(html_str)
+
 def serve_html(html_str: str, serve_locally: bool = True, port: int = 8000):
     """Starts a server which serves a specified HTML string
     
