@@ -251,7 +251,7 @@ class Scene:
         """
         return self.multi_scene.add_mesh(0, 0, fs, faces, Ns, uvs, wrap_us, cs, y_up, is_animated)
 
-     def add_point_cloud(self, xs: Tensor, radii: float = 0.1, cs: Optional[Tensor] = None, y_up: bool = False, is_animated: bool = False):
+    def add_point_cloud(self, xs: Tensor, radii: float = 0.1, cs: Optional[Tensor] = None, y_up: bool = False, is_animated: bool = False):
         """Adds a point cloud to a specified scene, with no colors or colors from the Turbo colormap
 
         Args:
@@ -275,3 +275,7 @@ class Scene:
             is_animated (bool): whether or not data is dynamic, to be rendered as an animation
         """
         return self.multi_scene.add_curve(0, 0, xs, is_looped, radius, color, y_up, is_animated)
+
+    def make(self) -> str:
+        """Generate HTML string for rendering"""
+        return self.multi_scene.make()
