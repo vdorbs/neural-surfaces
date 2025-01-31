@@ -83,7 +83,7 @@ def load_obj_from_url(url: str) -> Tuple[Tensor, Tensor]:
     """
     with urlopen(url) as response:
         buffer = BytesIO(response.read())
-    mesh = load_obj(buffer, maintain_order=True)
+    mesh = load_obj(buffer, maintain_order=True)['geometry']['geometry']
     return tensor(mesh['vertices']), tensor(mesh['faces'])
 
 def meshes_to_html(all_fs: List[List[Tensor]], all_faces: List[List[Tensor]], all_Ns: List[List[Tensor]], all_uvs: List[List[Tensor]], y_up: bool = True, mode: str = 'none') -> str:
